@@ -1,14 +1,10 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StatusBar } from "./StatusBar";
 
 describe("StatusBar", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
   it("renders green pill when API reports ok", async () => {
