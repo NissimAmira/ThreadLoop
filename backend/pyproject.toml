@@ -45,6 +45,9 @@ ignore = [
     "B008",  # FastAPI dependency injection idiom: Depends() in defaults
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
 [tool.ruff.lint.per-file-ignores]
 # Alembic auto-generated revisions use the legacy typing module + their own import order.
 "alembic/versions/*" = ["UP007", "UP035", "I001"]
