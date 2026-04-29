@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 Maintained automatically by [release-please](https://github.com/googleapis/release-please).
 
+## [1.1.0](https://github.com/NissimAmira/ThreadLoop/compare/v1.0.0...v1.1.0) (2026-04-29)
+
+
+### Features
+
+* add CR subagent and the rule that keeps it in sync ([9c16d7d](https://github.com/NissimAmira/ThreadLoop/commit/9c16d7dddeb94ceb15502543b49982a28258f14c))
+* docs-as-part-of-done policy ([0fa5414](https://github.com/NissimAmira/ThreadLoop/commit/0fa5414f6da889444166795fcf36100bf4deab48))
+* docs-as-part-of-done policy + CR subagent ([e3bceef](https://github.com/NissimAmira/ThreadLoop/commit/e3bceef2c172aa99195dd72740dbd9e02be74cf9))
+
 ## 1.0.0 (2026-04-29)
 
 
