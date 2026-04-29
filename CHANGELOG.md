@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Maintained automatically by [release-please](https://github.com/googleapis/release-please).
 
+## [1.2.0](https://github.com/NissimAmira/ThreadLoop/compare/v1.1.0...v1.2.0) (2026-04-29)
+
+
+### Features
+
+* **devops:** production Dockerfiles + phased roadmap with explicit triggers ([9d01208](https://github.com/NissimAmira/ThreadLoop/commit/9d0120870c713b0537958284026b2fa0936e13d6))
+* **devops:** production Dockerfiles + phased roadmap with triggers ([7895e81](https://github.com/NissimAmira/ThreadLoop/commit/7895e81f1221289861f8b5c3c3411a3eb13f2fe1))
+
 ## [1.1.0](https://github.com/NissimAmira/ThreadLoop/compare/v1.0.0...v1.1.0) (2026-04-29)
 
 
