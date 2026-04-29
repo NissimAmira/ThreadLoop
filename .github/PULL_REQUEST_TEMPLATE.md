@@ -19,6 +19,22 @@
 - [ ] Manual smoke check
 - [ ] OpenAPI / shared types regenerated if API changed
 
+## Documentation
+
+<!--
+Per docs/contributing.md → "Documentation is part of done", every PR keeps
+docs in sync with the change. Tick the boxes that apply, OR strike through
+the section with a one-line justification (e.g. "no doc impact: pure
+refactor with no API/schema/architecture changes").
+-->
+
+- [ ] `shared/openapi.yaml` updated (any API surface change)
+- [ ] `system_design.md` updated (API contracts / SQL schema change)
+- [ ] Relevant `docs/<topic>.md` updated (auth/search/assets/architecture)
+- [ ] `CLAUDE.md` updated (convention or what-not-to-do change)
+- [ ] `README.md` roadmap ticked (user-visible feature shipped)
+- [ ] No documentation impact (justify in summary)
+
 ## Checklist
 
 - [ ] Conventional commit title (e.g. `feat:`, `fix:`, `chore:`)

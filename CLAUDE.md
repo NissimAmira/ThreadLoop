@@ -71,6 +71,7 @@ make help         # list all targets
 - **Trunk-based branching.** Branch from `main` as `feat/<topic>` or `fix/<topic>`. Open a PR — never commit directly to `main`.
 - **Conventional commits.** `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. `release-please` reads these to cut releases.
 - **Contract-first.** Any API change updates `shared/openapi.yaml` and the matching TS types in `shared/src/types/` in the same PR as the backend change.
+- **Documentation is part of "done".** Every PR must keep docs in sync with the change. The full list of which doc updates which kind of change lives in [`docs/contributing.md`](./docs/contributing.md#documentation-is-part-of-done). The AI reviewer (`.github/workflows/ai-review.yml`) flags drift; the PR template has a checkbox; reviewers block on it.
 - **Migrations are reversible.** Every Alembic revision must implement `downgrade()`.
 - **Auth is SSO-only.** No password fields anywhere. Identity is `(provider, provider_user_id)`.
 - **Search goes through `SearchService`.** Never query Meilisearch directly from a route — keep it swappable.

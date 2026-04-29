@@ -53,6 +53,48 @@ The canonical example: add a new endpoint that the web app consumes.
 7. **Cypress smoke test** for any new user-visible flow.
 8. `make test && make lint`. Push when green.
 
+## Documentation is part of "done"
+
+A PR is not finished until the documentation is consistent with the change.
+This is a hard rule, enforced by reviewers and the AI reviewer (see below).
+Treat docs like tests: if the diff makes them wrong, you fix them in the
+same PR.
+
+### When to update which doc
+
+| If the PR changes... | Update... |
+| --- | --- |
+| Any HTTP API surface (route, request body, response shape, status codes) | `shared/openapi.yaml` **and** `system_design.md` |
+| TypeScript domain types | `shared/src/types/*.ts` (and re-export from `shared/src/index.ts`) |
+| Database schema (model, migration, constraint) | `system_design.md` SQL section + relevant `docs/<topic>.md` |
+| Auth model, account linking, capability flags | `docs/auth.md` |
+| Search backend, indexing, query semantics | `docs/search.md` |
+| Image / AR pipeline, CDN, storage layout | `docs/assets.md` |
+| Architecture, scaling, infrastructure primitives | `docs/architecture.md` |
+| Branching, releases, CI gating, ruleset | `.github/branch-protection.md` and/or `docs/development-cycle.md` |
+| release-please / GitHub App configuration | `.github/release-please-app-setup.md` |
+| New folder, workspace, or package | `docs/repository-structure.md` |
+| User-visible roadmap completion | Tick the box in the README's `<!-- ROADMAP -->` block |
+| Operating model: how to add a feature, run tests, debug | `docs/contributing.md` (this file) |
+| AI/agent conventions, what-not-to-do, orientation | `CLAUDE.md` |
+
+If a change cuts across several of these, update **all** of the affected
+docs in the same PR.
+
+### Rules of thumb
+
+- **Contract-first.** API changes update `shared/openapi.yaml` and `shared/src/types/*.ts` *before* (or alongside) the implementation. Reviewers will block PRs that drift.
+- **Migrations document themselves in `system_design.md`.** If you add a column or table, the corresponding entry in `system_design.md` must reflect it. Auto-generated revisions don't update prose.
+- **"What's not implemented yet" sections are load-bearing.** Each domain doc (`docs/auth.md`, `search.md`, `assets.md`) ends with one. When you ship the implementation, move items out of that section.
+- **No "follow-up doc PR" promises.** If you find yourself writing "I'll update the docs in a follow-up," stop and update them now. Follow-ups don't happen.
+- **Don't update auto-generated content.** The README `<!-- STATUS -->` and `<!-- ROADMAP -->` blocks are maintained by `.github/workflows/readme-sync.yml`. Edit only the surrounding prose.
+
+### How this is enforced
+
+1. **PR template** has a documentation checkbox you must tick (or strike through with reasoning).
+2. **AI reviewer** (`.github/workflows/ai-review.yml`) flags doc drift as a `must_fix` finding when API/schema changes lack matching doc updates.
+3. **Branch protection** still requires conversation resolution — leaving an AI doc-drift comment unresolved blocks merge.
+
 ## Coding standards
 
 ### Backend (Python)

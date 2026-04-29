@@ -51,9 +51,9 @@ chore(deps): bump fastapi to 0.115.5
 
 | Pipeline | Triggers when changes touch | Runs |
 | --- | --- | --- |
-| Backend CI | `backend/**`, `shared/**` | Ruff lint, mypy, Alembic migrations against fresh Postgres, Pytest with coverage, Schemathesis (planned) |
-| Web CI | `frontend-web/**`, `shared/**` | tsc, ESLint, Vitest, production build |
-| Mobile CI | `frontend-mobile/**`, `shared/**` | tsc, Jest |
+| Backend CI | every PR | Ruff lint, mypy, Alembic migrations against fresh Postgres, Pytest with coverage, Schemathesis (planned) |
+| Web CI | every PR | tsc, ESLint, Vitest, production build |
+| Mobile CI | every PR | tsc, Jest |
 
 **Required to merge:**
 - All triggered pipelines green
