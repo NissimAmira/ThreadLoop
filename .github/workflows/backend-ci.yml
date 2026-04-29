@@ -1,0 +1,66 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "shared/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "shared/**"
+      - ".github/workflows/backend-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: threadloop
+          POSTGRES_PASSWORD: threadloop
+          POSTGRES_DB: threadloop_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U threadloop -d threadloop_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: postgresql+psycopg://threadloop:threadloop@localhost:5432/threadloop_test
+      REDIS_URL: redis://localhost:6379/0
+      MEILI_URL: http://localhost:7700
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy app || true   # advisory until codebase grows
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Test
+        run: pytest -q --cov=app --cov-report=term-missing

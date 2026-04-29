@@ -1,0 +1,45 @@
+name: Web CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend-web/**"
+      - "shared/**"
+      - ".github/workflows/frontend-web-ci.yml"
+  pull_request:
+    paths:
+      - "frontend-web/**"
+      - "shared/**"
+      - ".github/workflows/frontend-web-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend-web/package.json
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

@@ -1,0 +1,67 @@
+name: README sync
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Regenerate roadmap from milestone progress
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Pull open + closed milestones, format as a markdown checklist.
+          milestones_json=$(gh api "repos/$REPO/milestones?state=all&per_page=100" || echo "[]")
+          {
+            echo "<!-- ROADMAP:START -->"
+            echo "## Roadmap"
+            echo ""
+            if [ "$(echo "$milestones_json" | jq 'length')" -eq 0 ]; then
+              # No milestones yet — leave the existing checklist alone by re-emitting the static one.
+              awk '/<!-- ROADMAP:START -->/{flag=1;next}/<!-- ROADMAP:END -->/{flag=0}flag' README.md \
+                | sed '1,/^$/d'
+            else
+              echo "$milestones_json" \
+                | jq -r '.[] | "- [\(if .state=="closed" then "x" else " " end)] \(.title)"'
+            fi
+            echo "<!-- ROADMAP:END -->"
+          } > /tmp/roadmap.md
+
+          # Splice into README between markers.
+          python3 - <<'PY'
+          import pathlib, re
+          readme = pathlib.Path("README.md").read_text()
+          new = pathlib.Path("/tmp/roadmap.md").read_text().rstrip() + "\n"
+          readme = re.sub(
+              r"<!-- ROADMAP:START -->[\s\S]*?<!-- ROADMAP:END -->",
+              new.rstrip(),
+              readme,
+          )
+          pathlib.Path("README.md").write_text(readme)
+          PY
+
+      - name: Commit if changed
+        run: |
+          if [ -n "$(git status --porcelain README.md)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add README.md
+            git commit -m "chore(readme): sync auto-generated sections"
+            git push
+          else
+            echo "README is already in sync."
+          fi

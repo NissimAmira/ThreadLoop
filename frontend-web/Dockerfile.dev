@@ -1,0 +1,17 @@
+FROM node:20-alpine
+
+WORKDIR /workspace
+
+# Install workspace deps in two stages so node_modules caches well.
+COPY shared/package.json ./shared/
+COPY frontend-web/package.json ./frontend-web/
+
+WORKDIR /workspace/frontend-web
+RUN npm install --no-audit --no-fund
+
+COPY shared ../shared
+COPY frontend-web .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev"]
