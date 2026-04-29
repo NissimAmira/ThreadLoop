@@ -3,11 +3,32 @@
 Quick-reference for Claude (and humans) working on ThreadLoop. Keep this file
 **short and load-bearing** — push detail into [`docs/`](./docs) instead.
 
+## Starting a new session — read these first, in order
+
+1. **This file** — orientation, conventions, what NOT to do.
+2. **`README.md`** — current roadmap with checkboxes (what's done, what's next).
+3. **`git log --oneline origin/main -20`** — what just shipped.
+4. **`gh pr list`** — anything in flight.
+5. The relevant **`docs/<topic>.md`** for whatever you're touching.
+
+If those four shell commands return nothing surprising, the repo is in a
+**clean state** — pick the next unchecked item from the README roadmap and
+branch off `main`.
+
 ## What this repo is
 
 A peer-to-peer second-hand fashion marketplace with AR try-on, structured as a
 monorepo. Every user is both buyer and seller. SSO-only authentication
 (Google / Apple / Facebook), no passwords.
+
+## What's actually built vs designed
+
+The infrastructure setup is complete and `v1.0.0` shipped: monorepo scaffold,
+health-check flow, CI gating, branch protection, release-please with a
+GitHub App. The product features (auth, listings, search, transactions, AR
+viewer) have **schemas and design docs but no implementation yet** — each
+domain doc has a "What's not implemented yet" section that calls this out.
+The next planned workstream is `feat/auth-sso`.
 
 ## Workspaces
 
@@ -28,6 +49,11 @@ monorepo. Every user is both buyer and seller. SSO-only authentication
 - [`docs/development-cycle.md`](./docs/development-cycle.md) — Dev → Test → Prod workflow.
 - [`docs/repository-structure.md`](./docs/repository-structure.md) — every folder explained.
 - [`docs/contributing.md`](./docs/contributing.md) — branch/commit/PR conventions.
+- [`docs/auth.md`](./docs/auth.md) — SSO design, account linking, dual-role buyer/seller.
+- [`docs/search.md`](./docs/search.md) — Meilisearch interface and swap path.
+- [`docs/assets.md`](./docs/assets.md) — image and AR/.glb pipelines.
+- [`.github/branch-protection.md`](./.github/branch-protection.md) — branch ruleset + why 0 approvals.
+- [`.github/release-please-app-setup.md`](./.github/release-please-app-setup.md) — release-please GitHub App setup (why and how).
 
 ## Running things
 
