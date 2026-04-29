@@ -56,3 +56,13 @@ jobs:
 
       - name: Test
         run: pytest -q --cov=app --cov-report=term-missing
+
+      # Validate the production image builds. We don't push it — push wires
+      # up in the first deploy phase per docs/devops-roadmap.md.
+      - name: Build production image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.prod
+          push: false
+          tags: threadloop-backend:ci

@@ -1,0 +1,57 @@
+# Production multi-stage build for the FastAPI backend.
+# The dev Dockerfile (./Dockerfile) is for `make dev` / docker compose; this
+# one is what ships. See ../docs/devops-roadmap.md for when this is used.
+
+# --- Builder stage ---
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build into an isolated venv that we copy whole into the runtime stage.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /build
+COPY pyproject.toml ./
+COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
+
+# Install runtime deps only (NOT [dev]) plus the app itself.
+RUN pip install --upgrade pip && pip install .
+
+# --- Runtime stage ---
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PORT=8000 \
+    WORKERS=4
+
+RUN useradd --create-home --shell /bin/bash app
+WORKDIR /app
+
+# Pre-built venv has the app + runtime deps installed.
+COPY --from=builder /opt/venv /opt/venv
+
+# Alembic config and revisions are not part of the Python package; copy
+# them so `alembic upgrade head` can run inside the container.
+COPY --from=builder /build/alembic ./alembic
+COPY --from=builder /build/alembic.ini ./
+
+USER app
+EXPOSE 8000
+
+# Healthcheck is intentionally not in the Dockerfile — orchestrators
+# (Fly.io, k8s liveness/readiness probes) define their own. /api/health
+# is the canonical endpoint.
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers ${WORKERS}"]

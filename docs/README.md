@@ -9,6 +9,7 @@
 | [`auth.md`](./auth.md) | SSO design, account linking across providers, dual-role buyer/seller authorization model. |
 | [`search.md`](./search.md) | Meilisearch integration, the `SearchService` interface, swap path to/from Postgres FTS. |
 | [`assets.md`](./assets.md) | Image upload pipeline, AR `.glb` processing, CDN strategy. |
+| [`devops-roadmap.md`](./devops-roadmap.md) | Phased deployment / monitoring / k8s plan with explicit triggers. **Scan it whenever a deployment/infra/performance topic comes up** — it tells you when to introduce each capability. |
 
 The two contract documents live at the **repo root** because they're shared with non-developers and tooling:
 

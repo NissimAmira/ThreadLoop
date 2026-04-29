@@ -77,6 +77,7 @@ same PR.
 | User-visible roadmap completion | Tick the box in the README's `<!-- ROADMAP -->` block |
 | Operating model: how to add a feature, run tests, debug | `docs/contributing.md` (this file) |
 | AI/agent conventions, what-not-to-do, orientation | `CLAUDE.md` |
+| Cloud target, deploy strategy, monitoring stack, k8s/Helm, rollback approach, environment topology | `docs/devops-roadmap.md` (and update `infra/README.md` if the change lands code there) |
 | **Any new project convention, guideline, schema constraint, or enforcement rule** | **`.claude/agents/cr.md`** (so the CR subagent enforces it on future reviews) |
 
 If a change cuts across several of these, update **all** of the affected
