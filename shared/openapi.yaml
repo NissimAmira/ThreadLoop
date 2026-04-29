@@ -1,0 +1,322 @@
+openapi: 3.1.0
+info:
+  title: ThreadLoop API
+  version: 0.1.0
+  description: |
+    Source-of-truth contract for the ThreadLoop marketplace API.
+    The TypeScript types in `shared/src/types` mirror this spec.
+servers:
+  - url: http://localhost:8000
+    description: Local dev
+  - url: https://api.threadloop.example
+    description: Production
+
+tags:
+  - name: health
+  - name: auth
+  - name: users
+  - name: listings
+  - name: search
+  - name: transactions
+
+paths:
+  /api/health:
+    get:
+      tags: [health]
+      summary: Service + dependency health check
+      responses:
+        "200":
+          description: Always 200; consult `status` field.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthResponse" }
+
+  /api/auth/{provider}/callback:
+    post:
+      tags: [auth]
+      summary: Exchange a provider ID token for a ThreadLoop session
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema: { type: string, enum: [google, apple, facebook] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SsoCallbackInput" }
+      responses:
+        "200":
+          description: Session created. Refresh token set as httpOnly cookie.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+
+  /api/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Issue a new access token using the refresh cookie
+      responses:
+        "200":
+          description: New session issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Clear refresh cookie
+      responses:
+        "204": { description: Logged out }
+
+  /api/me:
+    get:
+      tags: [users]
+      summary: Get the currently authenticated user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /api/listings:
+    get:
+      tags: [listings]
+      summary: List active listings (cursor pagination)
+      parameters:
+        - in: query
+          name: cursor
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: Page of listings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListingPage" }
+    post:
+      tags: [listings]
+      summary: Create a new listing (seller capability required)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateListingInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+
+  /api/listings/{id}:
+    get:
+      tags: [listings]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Listing detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Listing" }
+        "404": { description: Not found }
+
+  /api/search:
+    get:
+      tags: [search]
+      summary: Faceted search backed by Meilisearch
+      parameters:
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: brand, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: size, schema: { type: string } }
+        - { in: query, name: condition, schema: { type: string, enum: [new, like_new, good, fair] } }
+        - { in: query, name: min_price, schema: { type: integer } }
+        - { in: query, name: max_price, schema: { type: integer } }
+        - { in: query, name: page, schema: { type: integer, default: 1 } }
+      responses:
+        "200":
+          description: Search hits + facets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResult" }
+
+  /api/transactions:
+    post:
+      tags: [transactions]
+      summary: Open a pending purchase for a listing
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [listing_id]
+              properties:
+                listing_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Pending transaction created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transaction" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    DependencyStatus:
+      type: string
+      enum: [ok, degraded, down]
+
+    HealthResponse:
+      type: object
+      required: [status, version, db, redis, meili]
+      properties:
+        status:  { $ref: "#/components/schemas/DependencyStatus" }
+        version: { type: string }
+        db:      { $ref: "#/components/schemas/DependencyStatus" }
+        redis:   { $ref: "#/components/schemas/DependencyStatus" }
+        meili:   { $ref: "#/components/schemas/DependencyStatus" }
+
+    SsoCallbackInput:
+      type: object
+      properties:
+        id_token:     { type: string, description: "Google/Apple ID token" }
+        code:         { type: string, description: "Apple authorization code" }
+        access_token: { type: string, description: "Facebook access token" }
+
+    User:
+      type: object
+      required: [id, provider, display_name, can_sell, can_purchase]
+      properties:
+        id:             { type: string, format: uuid }
+        provider:       { type: string, enum: [google, apple, facebook] }
+        email:          { type: string, nullable: true }
+        email_verified: { type: boolean }
+        display_name:   { type: string }
+        avatar_url:     { type: string, nullable: true }
+        can_sell:       { type: boolean }
+        can_purchase:   { type: boolean }
+        seller_rating:  { type: number, nullable: true }
+        created_at:     { type: string, format: date-time }
+        updated_at:     { type: string, format: date-time }
+
+    Session:
+      type: object
+      required: [access_token, expires_at, user]
+      properties:
+        access_token: { type: string }
+        expires_at:   { type: string, format: date-time }
+        user:         { $ref: "#/components/schemas/User" }
+
+    ListingImage:
+      type: object
+      required: [id, position, url]
+      properties:
+        id:       { type: string, format: uuid }
+        position: { type: integer }
+        url:      { type: string, format: uri }
+        width:    { type: integer, nullable: true }
+        height:   { type: integer, nullable: true }
+
+    ListingArAsset:
+      type: object
+      required: [glb_low_url, glb_high_url]
+      properties:
+        glb_low_url:  { type: string, format: uri }
+        glb_high_url: { type: string, format: uri }
+        processed_at: { type: string, format: date-time, nullable: true }
+
+    Listing:
+      type: object
+      required:
+        [id, seller_id, title, category, condition, price_cents, currency, status, images]
+      properties:
+        id:          { type: string, format: uuid }
+        seller_id:   { type: string, format: uuid }
+        title:       { type: string }
+        description: { type: string, nullable: true }
+        brand:       { type: string, nullable: true }
+        category:    { type: string }
+        size:        { type: string, nullable: true }
+        condition:   { type: string, enum: [new, like_new, good, fair] }
+        price_cents: { type: integer, minimum: 1 }
+        currency:    { type: string, minLength: 3, maxLength: 3 }
+        status:      { type: string, enum: [draft, active, sold, removed] }
+        images:      { type: array, items: { $ref: "#/components/schemas/ListingImage" } }
+        ar_asset:    { $ref: "#/components/schemas/ListingArAsset", nullable: true }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    CreateListingInput:
+      type: object
+      required: [title, category, condition, price_cents]
+      properties:
+        title:       { type: string, maxLength: 200 }
+        description: { type: string }
+        brand:       { type: string }
+        category:    { type: string }
+        size:        { type: string }
+        condition:   { type: string, enum: [new, like_new, good, fair] }
+        price_cents: { type: integer, minimum: 1 }
+        currency:    { type: string, default: "USD" }
+
+    ListingPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:       { type: array, items: { $ref: "#/components/schemas/Listing" } }
+        next_cursor: { type: string, nullable: true }
+
+    SearchResult:
+      type: object
+      required: [hits, facets, page, total_pages, total_hits]
+      properties:
+        hits:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/Listing"
+              - type: object
+                properties:
+                  score: { type: number }
+        facets:
+          type: object
+          properties:
+            brand:     { type: object, additionalProperties: { type: integer } }
+            category:  { type: object, additionalProperties: { type: integer } }
+            size:      { type: object, additionalProperties: { type: integer } }
+            condition: { type: object, additionalProperties: { type: integer } }
+        page:        { type: integer }
+        total_pages: { type: integer }
+        total_hits:  { type: integer }
+
+    Transaction:
+      type: object
+      required:
+        [id, listing_id, buyer_id, seller_id, amount_cents, currency, status]
+      properties:
+        id:           { type: string, format: uuid }
+        listing_id:   { type: string, format: uuid }
+        buyer_id:     { type: string, format: uuid }
+        seller_id:    { type: string, format: uuid }
+        amount_cents: { type: integer }
+        currency:     { type: string, minLength: 3, maxLength: 3 }
+        status:
+          type: string
+          enum: [pending, paid, shipped, delivered, disputed, refunded]
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
