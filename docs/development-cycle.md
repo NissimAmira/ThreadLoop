@@ -86,6 +86,12 @@ a release PR. The PR:
 The tag triggers the **prod deployment** workflow (blue/green on the prod
 cluster, runs DB migrations, smoke-tests `/api/health`, flips traffic).
 
+`release-please` authenticates as a **GitHub App** (`ThreadLoop Release Bot`),
+not `GITHUB_TOKEN`. This is required so that the release PRs it opens get CI
+runs — `GITHUB_TOKEN`-authored events deliberately don't trigger downstream
+workflows. See [`.github/release-please-app-setup.md`](../.github/release-please-app-setup.md)
+for the one-time App setup if you ever need to recreate it.
+
 ### Rollback
 
 Two options, in order of preference:

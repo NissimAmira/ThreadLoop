@@ -5,14 +5,25 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read   # the GitHub App token below grants what release-please needs
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      # Mint a short-lived token from the "ThreadLoop Release Bot" GitHub App.
+      # Pushes/PRs made with this token DO trigger downstream workflows
+      # (unlike GITHUB_TOKEN, which intentionally does not).
+      # See .github/release-please-app-setup.md for one-time setup.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
         with:
           release-type: simple
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
