@@ -56,7 +56,7 @@ The canonical example: add a new endpoint that the web app consumes.
 ## Documentation is part of "done"
 
 A PR is not finished until the documentation is consistent with the change.
-This is a hard rule, enforced by reviewers and the AI reviewer (see below).
+This is a hard rule, enforced by reviewers and the CR subagent (see below).
 Treat docs like tests: if the diff makes them wrong, you fix them in the
 same PR.
 
@@ -77,6 +77,7 @@ same PR.
 | User-visible roadmap completion | Tick the box in the README's `<!-- ROADMAP -->` block |
 | Operating model: how to add a feature, run tests, debug | `docs/contributing.md` (this file) |
 | AI/agent conventions, what-not-to-do, orientation | `CLAUDE.md` |
+| **Any new project convention, guideline, schema constraint, or enforcement rule** | **`.claude/agents/cr.md`** (so the CR subagent enforces it on future reviews) |
 
 If a change cuts across several of these, update **all** of the affected
 docs in the same PR.
@@ -92,8 +93,22 @@ docs in the same PR.
 ### How this is enforced
 
 1. **PR template** has a documentation checkbox you must tick (or strike through with reasoning).
-2. **AI reviewer** (`.github/workflows/ai-review.yml`) flags doc drift as a `must_fix` finding when API/schema changes lack matching doc updates.
-3. **Branch protection** still requires conversation resolution — leaving an AI doc-drift comment unresolved blocks merge.
+2. **Reviewer expectation** — checking docs against the change is part of every code review.
+3. **CR subagent** — `.claude/agents/cr.md`, invoked locally via Claude Code, treats missing required doc updates as a `must_fix` finding. See [`.claude/agents/cr.md`](../.claude/agents/cr.md) for the full rubric. Local-only by design (uses your Claude Code subscription, not the Anthropic API), so there are no per-PR costs.
+4. **Branch protection** requires conversation resolution, so an unresolved doc-drift comment blocks merge.
+
+### Critical: keep the CR subagent in sync
+
+The CR subagent (`.claude/agents/cr.md`) has the full rubric, severity
+buckets, and convention list baked into its system prompt. It is **not**
+auto-synced — when you introduce a new convention, schema constraint,
+guideline, or enforcement rule anywhere else in the repo, **update the
+subagent in the same PR**. Otherwise the next review won't know to
+enforce the new rule.
+
+The table above includes a row for this. The subagent itself includes
+an instruction to flag PRs that modify it as a meta-change so you don't
+forget that future reviews will use the new rubric.
 
 ## Coding standards
 
