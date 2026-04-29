@@ -20,6 +20,13 @@ install: ## Install all workspace deps (web, mobile, shared)
 	cd frontend-web && npm install
 	cd frontend-mobile && npm install
 
+.PHONY: hooks
+hooks: ## Install git pre-commit hooks (requires `pip install pre-commit`)
+	@command -v pre-commit >/dev/null 2>&1 || { \
+		echo "pre-commit not found. Install with: pip install pre-commit"; exit 1; }
+	pre-commit install
+	@echo "✓ Hooks installed. Run \`pre-commit run --all-files\` once to bootstrap."
+
 # ---------- Local stack ----------
 
 .PHONY: dev

@@ -10,12 +10,29 @@ git clone https://github.com/NissimAmira/ThreadLoop.git
 cd ThreadLoop
 make env          # copies .env.example → .env
 make install      # installs web/mobile/shared node_modules
+pip install pre-commit && make hooks   # install git pre-commit hooks
 make dev          # starts the stack via Docker Compose
 make migrate      # in another terminal — apply Alembic migrations
 make health       # verify /api/health says all "ok"
 ```
 
 If any of those steps fail, **fix them first** rather than working around them.
+
+### Pre-commit hooks
+
+Pre-commit runs the same lint/format/typecheck CI runs, but **before** the
+commit lands. This catches the failures that block PRs (Ruff complaints,
+Prettier drift, ESLint errors) at your keyboard instead of in GitHub Actions.
+
+```bash
+pre-commit run --all-files     # one-time bootstrap (touches everything)
+git commit                     # hooks run automatically on staged files
+pre-commit run --hook-stage manual   # opt-in heavier checks
+```
+
+If a hook auto-fixes files (Ruff `--fix`, Prettier), you'll need to `git add`
+the changes and commit again. To bypass in an emergency:
+`git commit --no-verify` — but expect CI to catch what you skipped.
 
 ## Adding a feature end-to-end
 
