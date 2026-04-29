@@ -35,3 +35,15 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Validate the production image builds. Context is the repo root
+      # because the Dockerfile copies from both shared/ and frontend-web/.
+      # We don't push it — push wires up in the first deploy phase per
+      # docs/devops-roadmap.md.
+      - name: Build production image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: frontend-web/Dockerfile.prod
+          push: false
+          tags: threadloop-web:ci

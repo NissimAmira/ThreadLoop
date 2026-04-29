@@ -1,0 +1,40 @@
+# Production multi-stage build for the Vite/React frontend.
+# Dev container is frontend-web/Dockerfile.dev (used by docker compose).
+# Build context must be the repo root because we copy from both
+# shared/ and frontend-web/.
+
+# --- Builder stage ---
+FROM node:20-alpine AS builder
+
+WORKDIR /workspace
+
+# Install workspace deps in two stages so node_modules caches well.
+COPY shared/package.json ./shared/
+COPY frontend-web/package.json ./frontend-web/
+
+WORKDIR /workspace/frontend-web
+RUN npm install --no-audit --no-fund
+
+# Now copy the actual source.
+COPY shared ../shared
+COPY frontend-web .
+
+# Vite bakes VITE_* env vars at build time. Override with --build-arg
+# VITE_API_URL=https://api.example.com for a deploy. Default uses a
+# same-origin /api proxy (set up by your edge / nginx / Fly.io rule).
+ARG VITE_API_URL=/api
+ENV VITE_API_URL=${VITE_API_URL}
+
+RUN npm run build
+
+# --- Runtime stage ---
+FROM nginx:1.27-alpine AS runtime
+
+# SPA fallback + hashed-asset caching.
+COPY frontend-web/nginx.conf /etc/nginx/conf.d/default.conf
+
+# Built static assets.
+COPY --from=builder /workspace/frontend-web/dist /usr/share/nginx/html
+
+EXPOSE 80
+# nginx:alpine already runs `nginx -g "daemon off;"` as its default CMD.

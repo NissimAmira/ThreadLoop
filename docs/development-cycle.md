@@ -55,6 +55,16 @@ chore(deps): bump fastapi to 0.115.5
 | Web CI | every PR | tsc, ESLint, Vitest, production build |
 | Mobile CI | every PR | tsc, Jest |
 
+### Where prod, staging, and the rest of the deployment story live
+
+The Dev → Test flow above describes what runs on every PR. The
+deployment side (cloud target, monitoring stack, orchestration, rollback
+strategy, multi-environment promotion) follows a **phased roadmap with
+explicit triggers** — see [`devops-roadmap.md`](./devops-roadmap.md). Do
+not introduce a phase before its trigger fires; conversely, the doc is
+written to be scanned every time a deployment / infrastructure / perf
+topic comes up so triggers are surfaced promptly.
+
 ### Local code review (CR subagent)
 
 The `cr` subagent at [`.claude/agents/cr.md`](../.claude/agents/cr.md) is the

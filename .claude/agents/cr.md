@@ -151,8 +151,22 @@ here is a `must_fix` finding** — cite the table row in
 | New folder, workspace, or package | `docs/repository-structure.md` |
 | Operating model: how to add a feature, run tests | `docs/contributing.md` |
 | AI/agent conventions, what-not-to-do, orientation | `CLAUDE.md` |
+| Cloud target / deploy / monitoring / k8s / rollback / environment topology | `docs/devops-roadmap.md` (and `infra/README.md` if code lands there) |
 | New convention/guideline/schema/policy | `.claude/agents/cr.md` (this file) |
 | User-visible roadmap completion | Tick the box in the README's `<!-- ROADMAP -->` block |
+
+### DevOps phasing
+
+ThreadLoop has a phased DevOps roadmap with explicit triggers — see
+`docs/devops-roadmap.md`. **Flag as `should_fix`** any PR that:
+
+- Adds infrastructure code from a phase whose trigger has not fired
+  (e.g., k8s manifests when there's still no deployed instance) — cite
+  the trigger that should fire first.
+- Crosses a trigger boundary without updating the roadmap doc itself.
+
+This is a code-quality issue, not a documentation one — shipping
+orchestration before it's needed dilutes the project's signal.
 
 ### CI and branching
 
