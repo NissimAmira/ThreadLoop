@@ -40,7 +40,14 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "SIM"]
-ignore = ["E501"]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # FastAPI dependency injection idiom: Depends() in defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic auto-generated revisions use the legacy typing module + their own import order.
+"alembic/versions/*" = ["UP007", "UP035", "I001"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
