@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  backend-test:
     runs-on: ubuntu-latest
     services:
       postgres:
