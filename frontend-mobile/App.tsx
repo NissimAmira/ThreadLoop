@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import Constants from "expo-constants";
 import type { DependencyStatus, HealthResponse } from "@threadloop/shared";
 
-const API_URL = (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? "http://localhost:8000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const dotColor: Record<DependencyStatus | "unknown", string> = {
   ok: "#10b981",
