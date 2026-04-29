@@ -53,6 +53,63 @@ The canonical example: add a new endpoint that the web app consumes.
 7. **Cypress smoke test** for any new user-visible flow.
 8. `make test && make lint`. Push when green.
 
+## Documentation is part of "done"
+
+A PR is not finished until the documentation is consistent with the change.
+This is a hard rule, enforced by reviewers and the CR subagent (see below).
+Treat docs like tests: if the diff makes them wrong, you fix them in the
+same PR.
+
+### When to update which doc
+
+| If the PR changes... | Update... |
+| --- | --- |
+| Any HTTP API surface (route, request body, response shape, status codes) | `shared/openapi.yaml` **and** `system_design.md` |
+| TypeScript domain types | `shared/src/types/*.ts` (and re-export from `shared/src/index.ts`) |
+| Database schema (model, migration, constraint) | `system_design.md` SQL section + relevant `docs/<topic>.md` |
+| Auth model, account linking, capability flags | `docs/auth.md` |
+| Search backend, indexing, query semantics | `docs/search.md` |
+| Image / AR pipeline, CDN, storage layout | `docs/assets.md` |
+| Architecture, scaling, infrastructure primitives | `docs/architecture.md` |
+| Branching, releases, CI gating, ruleset | `.github/branch-protection.md` and/or `docs/development-cycle.md` |
+| release-please / GitHub App configuration | `.github/release-please-app-setup.md` |
+| New folder, workspace, or package | `docs/repository-structure.md` |
+| User-visible roadmap completion | Tick the box in the README's `<!-- ROADMAP -->` block |
+| Operating model: how to add a feature, run tests, debug | `docs/contributing.md` (this file) |
+| AI/agent conventions, what-not-to-do, orientation | `CLAUDE.md` |
+| **Any new project convention, guideline, schema constraint, or enforcement rule** | **`.claude/agents/cr.md`** (so the CR subagent enforces it on future reviews) |
+
+If a change cuts across several of these, update **all** of the affected
+docs in the same PR.
+
+### Rules of thumb
+
+- **Contract-first.** API changes update `shared/openapi.yaml` and `shared/src/types/*.ts` *before* (or alongside) the implementation. Reviewers will block PRs that drift.
+- **Migrations document themselves in `system_design.md`.** If you add a column or table, the corresponding entry in `system_design.md` must reflect it. Auto-generated revisions don't update prose.
+- **"What's not implemented yet" sections are load-bearing.** Each domain doc (`docs/auth.md`, `search.md`, `assets.md`) ends with one. When you ship the implementation, move items out of that section.
+- **No "follow-up doc PR" promises.** If you find yourself writing "I'll update the docs in a follow-up," stop and update them now. Follow-ups don't happen.
+- **Don't update auto-generated content.** The README `<!-- STATUS -->` and `<!-- ROADMAP -->` blocks are maintained by `.github/workflows/readme-sync.yml`. Edit only the surrounding prose.
+
+### How this is enforced
+
+1. **PR template** has a documentation checkbox you must tick (or strike through with reasoning).
+2. **Reviewer expectation** — checking docs against the change is part of every code review.
+3. **CR subagent** — `.claude/agents/cr.md`, invoked locally via Claude Code, treats missing required doc updates as a `must_fix` finding. See [`.claude/agents/cr.md`](../.claude/agents/cr.md) for the full rubric. Local-only by design (uses your Claude Code subscription, not the Anthropic API), so there are no per-PR costs.
+4. **Branch protection** requires conversation resolution, so an unresolved doc-drift comment blocks merge.
+
+### Critical: keep the CR subagent in sync
+
+The CR subagent (`.claude/agents/cr.md`) has the full rubric, severity
+buckets, and convention list baked into its system prompt. It is **not**
+auto-synced — when you introduce a new convention, schema constraint,
+guideline, or enforcement rule anywhere else in the repo, **update the
+subagent in the same PR**. Otherwise the next review won't know to
+enforce the new rule.
+
+The table above includes a row for this. The subagent itself includes
+an instruction to flag PRs that modify it as a meta-change so you don't
+forget that future reviews will use the new rubric.
+
 ## Coding standards
 
 ### Backend (Python)

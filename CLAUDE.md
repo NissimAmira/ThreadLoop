@@ -54,6 +54,7 @@ The next planned workstream is `feat/auth-sso`.
 - [`docs/assets.md`](./docs/assets.md) — image and AR/.glb pipelines.
 - [`.github/branch-protection.md`](./.github/branch-protection.md) — branch ruleset + why 0 approvals.
 - [`.github/release-please-app-setup.md`](./.github/release-please-app-setup.md) — release-please GitHub App setup (why and how).
+- [`.claude/agents/cr.md`](./.claude/agents/cr.md) — CR subagent rubric (severity buckets, conventions, output format).
 
 ## Running things
 
@@ -71,6 +72,8 @@ make help         # list all targets
 - **Trunk-based branching.** Branch from `main` as `feat/<topic>` or `fix/<topic>`. Open a PR — never commit directly to `main`.
 - **Conventional commits.** `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. `release-please` reads these to cut releases.
 - **Contract-first.** Any API change updates `shared/openapi.yaml` and the matching TS types in `shared/src/types/` in the same PR as the backend change.
+- **Documentation is part of "done".** Every PR must keep docs in sync with the change. The full list of which doc updates which kind of change lives in [`docs/contributing.md`](./docs/contributing.md#documentation-is-part-of-done). The PR template has a checkbox; reviewers and the CR subagent block on doc drift.
+- **CR subagent ([`.claude/agents/cr.md`](./.claude/agents/cr.md)) is the local code reviewer.** Invoke it from any Claude Code session: *"review the current changes"* or *"have the cr agent review PR 42"*. It uses your Claude Code subscription (no API charges) and runs in its own context so big diffs don't pollute your main session. **When you introduce a new convention, schema constraint, or enforcement rule anywhere in the repo, update `.claude/agents/cr.md` in the same PR** — its rubric is baked in, not auto-synced.
 - **Migrations are reversible.** Every Alembic revision must implement `downgrade()`.
 - **Auth is SSO-only.** No password fields anywhere. Identity is `(provider, provider_user_id)`.
 - **Search goes through `SearchService`.** Never query Meilisearch directly from a route — keep it swappable.

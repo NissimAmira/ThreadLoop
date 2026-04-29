@@ -51,9 +51,30 @@ chore(deps): bump fastapi to 0.115.5
 
 | Pipeline | Triggers when changes touch | Runs |
 | --- | --- | --- |
-| Backend CI | `backend/**`, `shared/**` | Ruff lint, mypy, Alembic migrations against fresh Postgres, Pytest with coverage, Schemathesis (planned) |
-| Web CI | `frontend-web/**`, `shared/**` | tsc, ESLint, Vitest, production build |
-| Mobile CI | `frontend-mobile/**`, `shared/**` | tsc, Jest |
+| Backend CI | every PR | Ruff lint, mypy, Alembic migrations against fresh Postgres, Pytest with coverage, Schemathesis (planned) |
+| Web CI | every PR | tsc, ESLint, Vitest, production build |
+| Mobile CI | every PR | tsc, Jest |
+
+### Local code review (CR subagent)
+
+The `cr` subagent at [`.claude/agents/cr.md`](../.claude/agents/cr.md) is the
+local code reviewer. Invoke it from any Claude Code session — *"review the
+current changes"* or *"have the cr agent review PR 42"*. It runs against
+your Claude Code subscription (no per-PR API cost) and produces a structured
+review grouped into three severity buckets (`must_fix` / `should_fix` /
+`recommend`).
+
+It is **not** wired into CI — by design, since it relies on a developer's
+local Claude Code session. Use it before pushing or before requesting human
+review.
+
+**Keeping the CR subagent in sync:** the subagent has the rubric and the
+project conventions baked into its system prompt — it's not auto-synced.
+Whenever you introduce a new convention, schema constraint, guideline, or
+enforcement rule, update `.claude/agents/cr.md` in the same PR. The
+documentation table in [`docs/contributing.md`](./contributing.md#when-to-update-which-doc)
+includes a row for this; the subagent itself flags PRs that touch its own
+file as a meta-change.
 
 **Required to merge:**
 - All triggered pipelines green
