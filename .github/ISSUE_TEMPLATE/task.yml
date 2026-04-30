@@ -1,0 +1,71 @@
+name: Task
+description: An implementation sub-task under an epic. One branch + one PR per task.
+title: "[Task] "
+labels: ["type:task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tasks are the implementation children of an epic. Each task maps
+        to one branch and one PR. Acceptance criteria here are what the
+        CR subagent will validate the PR against.
+  - type: input
+    id: parent
+    attributes:
+      label: Parent epic
+      description: Issue number of the parent epic.
+      placeholder: "#42"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Backend
+        - Web frontend
+        - Mobile frontend
+        - Shared / contracts
+        - Test
+        - Infra / CI
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Technical scope
+      description: What does this task implement? Include relevant files, modules, or design references.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, verifiable outcomes for THIS task. The PR is reviewed against this list.
+      placeholder: |
+        - [ ] POST /api/auth/google/callback verifies the ID token signature against Google's JWKS
+        - [ ] On valid token, upserts users(provider='google', provider_user_id=<sub>)
+        - [ ] Returns access_token + sets refresh_token httpOnly cookie
+        - [ ] Pytest covers happy path + invalid signature + expired token
+        - [ ] shared/openapi.yaml updated to match the implemented endpoint
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Other tasks that must merge first. List as "blocks #N" / "blocked by #N".
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: What this task explicitly does NOT do (so reviewers don't ask for it).
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: [P0, P1, P2, P3]
+      default: 2
+    validations:
+      required: true

@@ -1,0 +1,51 @@
+name: RFC
+description: Propose a non-trivial product or architectural change. Pairs with a docs/rfcs/ document.
+title: "[RFC] "
+labels: ["type:rfc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use an RFC for changes whose **shape** is debatable: new product
+        features beyond a single endpoint, architectural shifts, or
+        anything where multiple paths exist and the choice deserves
+        record. The full proposal lives in `docs/rfcs/NNNN-<slug>.md`;
+        this issue is the discussion thread.
+  - type: input
+    id: doc
+    attributes:
+      label: Path to the RFC doc
+      description: Create the doc first using docs/rfcs/0000-template.md.
+      placeholder: docs/rfcs/0001-auth-sso.md
+    validations:
+      required: true
+  - type: textarea
+    id: tldr
+    attributes:
+      label: TL;DR
+      description: One paragraph summary so reviewers can decide whether to read the full RFC.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did we look at? Why did we not choose them?
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open questions
+      description: What still needs deciding before approval?
+  - type: dropdown
+    id: status
+    attributes:
+      label: Status
+      options:
+        - Draft
+        - Under review
+        - Approved
+        - Rejected
+        - Superseded
+      default: 0
+    validations:
+      required: true

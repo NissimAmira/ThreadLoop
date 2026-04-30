@@ -65,26 +65,39 @@ not introduce a phase before its trigger fires; conversely, the doc is
 written to be scanned every time a deployment / infrastructure / perf
 topic comes up so triggers are surfaced promptly.
 
-### Local code review (CR subagent)
+### The multi-agent dev cycle
 
-The `cr` subagent at [`.claude/agents/cr.md`](../.claude/agents/cr.md) is the
-local code reviewer. Invoke it from any Claude Code session — *"review the
-current changes"* or *"have the cr agent review PR 42"*. It runs against
-your Claude Code subscription (no per-PR API cost) and produces a structured
-review grouped into three severity buckets (`must_fix` / `should_fix` /
-`recommend`).
+Six subagents in [`.claude/agents/`](../.claude/agents/) cover the dev
+cycle: `pm` (design), `tech-lead` (decompose), `backend-dev` / `web-dev`
+/ `mobile-dev` (implement), and `cr` (review). The full flow with
+artifacts is documented in
+[`CLAUDE.md` → "How the dev cycle works"](../CLAUDE.md#how-the-dev-cycle-works).
+
+Each subagent runs in its own context window. The main Claude Code
+session orchestrates by invoking the right one for the phase you're in.
+
+### Local code review (`cr` subagent)
+
+The `cr` agent at [`.claude/agents/cr.md`](../.claude/agents/cr.md) is
+the local code reviewer. Invoke it from any Claude Code session — *"review
+the current changes"* or *"have the cr agent review PR 42"*. It runs
+against your Claude Code subscription (no per-PR API cost) and produces a
+structured review with three severity buckets (`must_fix` / `should_fix`
+/ `recommend`) **plus AC validation** against the linked task.
 
 It is **not** wired into CI — by design, since it relies on a developer's
-local Claude Code session. Use it before pushing or before requesting human
-review.
+local Claude Code session. Use it before pushing or before requesting
+human review.
 
-**Keeping the CR subagent in sync:** the subagent has the rubric and the
-project conventions baked into its system prompt — it's not auto-synced.
-Whenever you introduce a new convention, schema constraint, guideline, or
-enforcement rule, update `.claude/agents/cr.md` in the same PR. The
-documentation table in [`docs/contributing.md`](./contributing.md#when-to-update-which-doc)
-includes a row for this; the subagent itself flags PRs that touch its own
-file as a meta-change.
+**Keeping the dev-cycle agents in sync:** the agents have rubrics and
+project conventions baked into their system prompts — not auto-synced.
+Whenever you introduce a new convention, schema constraint, guideline,
+or enforcement rule, update the relevant agent file (typically `cr.md`,
+sometimes also a role agent like `backend-dev.md`) in the same PR. The
+documentation table in
+[`docs/contributing.md`](./contributing.md#when-to-update-which-doc)
+includes rows for this; the `cr` agent itself flags PRs that touch any
+agent file as a meta-change.
 
 **Required to merge:**
 - All triggered pipelines green

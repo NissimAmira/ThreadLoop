@@ -34,9 +34,36 @@ If a hook auto-fixes files (Ruff `--fix`, Prettier), you'll need to `git add`
 the changes and commit again. To bypass in an emergency:
 `git commit --no-verify` — but expect CI to catch what you skipped.
 
-## Adding a feature end-to-end
+## Adding a feature end-to-end (the multi-agent flow)
 
-The canonical example: add a new endpoint that the web app consumes.
+The canonical flow uses the dev-cycle subagents in `.claude/agents/`. See
+[`CLAUDE.md` → "How the dev cycle works"](../CLAUDE.md#how-the-dev-cycle-works)
+for the full picture. Briefly:
+
+1. **Design the feature with the `pm` agent.** Output: an RFC at
+   `docs/rfcs/NNNN-<slug>.md` (for non-trivial features) and an Epic
+   GitHub issue with user stories + acceptance criteria.
+2. **Decompose with the `tech-lead` agent.** Output: sub-issues under
+   the Epic by area (`[BE]`, `[FE-Web]`, `[FE-Mobile]`, `[Test]`,
+   `[Infra]`, `[Docs]`), each with concrete AC, dependencies, and
+   risks. May write an ADR if a non-obvious architectural choice is
+   made.
+3. **Implement each sub-task.** Invoke `backend-dev` / `web-dev` /
+   `mobile-dev` per area. Each produces one branch + one PR with the
+   linked task issue, AC list, and tests.
+4. **Review with the `cr` agent.** It validates the PR against the
+   linked task's AC and the project rubric. Address `must_fix`
+   findings before merge.
+5. **Merge.** release-please will eventually cut a versioned release.
+
+If a feature is small enough that this multi-step flow feels heavy
+(e.g., adding a single CRUD endpoint that follows existing patterns),
+skip the RFC, open the Epic + tasks directly, and proceed. The `cr`
+agent will not flag the missing RFC for trivial changes.
+
+### The technical work inside any backend feature
+
+When you (or `backend-dev`) actually implement a backend task:
 
 1. **Edit the contract.** Add the endpoint and any new schemas to
    `shared/openapi.yaml`. Add the matching TypeScript types to
@@ -48,9 +75,8 @@ The canonical example: add a new endpoint that the web app consumes.
 4. **Implement the route** in `backend/app/routers/`. Register it in `main.py`.
 5. **Write Pytest coverage** in `backend/tests/`. Cover the happy path,
    auth/permission failures, and validation failures.
-6. **Implement the web side**: hook into `src/api/client.ts`, build the
-   component, co-locate a Vitest spec.
-7. **Cypress smoke test** for any new user-visible flow.
+6. **Update docs** per the docs-as-part-of-done table.
+7. **Run the `cr` agent locally** before pushing.
 8. `make test && make lint`. Push when green.
 
 ## Documentation is part of "done"
@@ -78,7 +104,10 @@ same PR.
 | Operating model: how to add a feature, run tests, debug | `docs/contributing.md` (this file) |
 | AI/agent conventions, what-not-to-do, orientation | `CLAUDE.md` |
 | Cloud target, deploy strategy, monitoring stack, k8s/Helm, rollback approach, environment topology | `docs/devops-roadmap.md` (and update `infra/README.md` if the change lands code there) |
-| **Any new project convention, guideline, schema constraint, or enforcement rule** | **`.claude/agents/cr.md`** (so the CR subagent enforces it on future reviews) |
+| Non-trivial product feature or architectural change | RFC in `docs/rfcs/NNNN-<slug>.md` (use `0000-template.md`) + linked Epic issue. See [`docs/rfcs/README.md`](./rfcs/README.md). |
+| Non-obvious architectural decision recorded for future reference | ADR in `docs/adrs/NNNN-<slug>.md` (use `0000-template.md`). See [`docs/adrs/README.md`](./adrs/README.md). |
+| Dev-cycle agent role / rubric (pm, tech-lead, *-dev, cr) | The relevant `.claude/agents/<name>.md` |
+| **Any new project convention, guideline, schema constraint, or enforcement rule** | **`.claude/agents/cr.md`** (so the CR subagent enforces it on future reviews); also update affected role agents (e.g. `backend-dev.md` if backend-specific) |
 
 If a change cuts across several of these, update **all** of the affected
 docs in the same PR.

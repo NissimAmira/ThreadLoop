@@ -23,12 +23,78 @@ monorepo. Every user is both buyer and seller. SSO-only authentication
 
 ## What's actually built vs designed
 
-The infrastructure setup is complete and `v1.0.0` shipped: monorepo scaffold,
+The infrastructure setup is complete and `v1.2.0` shipped: monorepo scaffold,
 health-check flow, CI gating, branch protection, release-please with a
-GitHub App. The product features (auth, listings, search, transactions, AR
-viewer) have **schemas and design docs but no implementation yet** — each
-domain doc has a "What's not implemented yet" section that calls this out.
-The next planned workstream is `feat/auth-sso`.
+GitHub App, production Dockerfiles, phased DevOps roadmap, docs-as-part-of-done
+policy, local CR subagent, **task management via GitHub Projects + RFC/ADR
+conventions, and a multi-agent dev cycle simulating a real product team** (this
+is the most recent addition — see "How the dev cycle works" below).
+
+The product features (auth, listings, search, transactions, AR viewer) have
+**schemas and design docs but no implementation yet** — each domain doc has a
+"What's not implemented yet" section that calls this out. The next planned
+workstream is `feat/auth-sso` (RFC at `docs/rfcs/0001-auth-sso.md`), which
+will be the first real feature driven through the multi-agent cycle.
+
+## How the dev cycle works
+
+ThreadLoop simulates a real product team's role separation through six
+specialized Claude Code subagents in [`.claude/agents/`](./.claude/agents).
+Each agent has a role-specific system prompt, a tool allow-list, and runs in
+its own context window so phase artifacts don't pollute each other.
+
+```
+            IDEA / problem statement
+                       │
+                  invoke pm
+                       │
+        docs/rfcs/NNNN.md + Epic issue
+            (user stories, AC, open Qs)
+                       │
+            (human reviews / approves)
+                       │
+               invoke tech-lead
+                       │
+       sub-issues under the Epic, by area
+       [BE] / [FE-Web] / [FE-Mobile]
+       [Test] / [Infra] / [Docs]
+       (each with concrete AC, deps, risks)
+                       │
+        ┌──────────┬───┴────┬──────────┐
+        ▼          ▼        ▼          ▼
+   backend-dev  web-dev  mobile-dev  ...
+     PR #X       PR #Y    PR #Z
+        │          │        │
+        └──────────┴───┬────┘
+                       ▼
+                  invoke cr
+       (rubric + linked-task AC validation)
+                       │
+                    merge → ship
+                       │
+            release-please cuts vN.M.K
+```
+
+The main Claude Code session orchestrates: you say *"have the pm agent
+design SSO sign-in"*, then *"have the tech-lead break down epic #N"*, then
+*"have backend-dev implement task #N+2"*, then *"have the cr agent review
+the current changes"*. Each subagent reads `CLAUDE.md` + `docs/contributing.md`
+fresh on every invocation.
+
+| Subagent | Role | Inputs | Outputs |
+|---|---|---|---|
+| [`pm`](./.claude/agents/pm.md) | Product manager | Feature idea / problem statement | RFC in `docs/rfcs/` + Epic GitHub issue (user stories, AC, open questions) |
+| [`tech-lead`](./.claude/agents/tech-lead.md) | Tech lead | An approved Epic | Sub-issues under the Epic by area, with per-task AC, deps, risks; ADRs for architectural choices |
+| [`backend-dev`](./.claude/agents/backend-dev.md) | Backend engineer | A `[BE]` task | Branch + PR (FastAPI / SQLAlchemy / Alembic) |
+| [`web-dev`](./.claude/agents/web-dev.md) | Web engineer | A `[FE-Web]` task | Branch + PR (Vite / React / TS / Tailwind) |
+| [`mobile-dev`](./.claude/agents/mobile-dev.md) | Mobile engineer | A `[FE-Mobile]` task | Branch + PR (Expo / RN / TS) |
+| [`cr`](./.claude/agents/cr.md) | Code reviewer | An open PR | Findings against rubric + AC validation against the linked task |
+
+**Keeping the cycle in sync** is part of the docs-as-part-of-done policy.
+When you change a convention, schema constraint, or process rule, update the
+relevant agent rubric in the same PR — agents are not auto-synced. The
+`[`cr`](./.claude/agents/cr.md)` agent enforces this by flagging missing
+agent updates.
 
 ## Workspaces
 
@@ -54,8 +120,10 @@ The next planned workstream is `feat/auth-sso`.
 - [`docs/assets.md`](./docs/assets.md) — image and AR/.glb pipelines.
 - [`.github/branch-protection.md`](./.github/branch-protection.md) — branch ruleset + why 0 approvals.
 - [`.github/release-please-app-setup.md`](./.github/release-please-app-setup.md) — release-please GitHub App setup (why and how).
-- [`.claude/agents/cr.md`](./.claude/agents/cr.md) — CR subagent rubric (severity buckets, conventions, output format).
+- [`.claude/agents/`](./.claude/agents/) — six dev-cycle subagents (`pm`, `tech-lead`, `backend-dev`, `web-dev`, `mobile-dev`, `cr`). See "How the dev cycle works" above.
 - [`docs/devops-roadmap.md`](./docs/devops-roadmap.md) — phased deployment/observability/orchestration plan with explicit triggers. **Scan it at session start** if any topic in the conversation touches deployment, infrastructure, performance, or observability — proactively prompt the user when a trigger has fired.
+- [`docs/rfcs/`](./docs/rfcs/) — design proposals for non-trivial product/architectural changes. Numbered, append-only.
+- [`docs/adrs/`](./docs/adrs/) — Architecture Decision Records. Short, focused "we decided X because Y" entries.
 
 ## Running things
 
