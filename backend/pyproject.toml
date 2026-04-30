@@ -64,3 +64,10 @@ markers = [
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# `authlib` ships no PEP 561 stubs and `types-Authlib` covers only a small
+# subset (notably not `authlib.jose`). Suppress the missing-stub errors here
+# rather than silencing them line-by-line at every call site.
+module = ["authlib.*"]
+ignore_missing_imports = true
