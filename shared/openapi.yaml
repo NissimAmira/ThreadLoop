@@ -34,12 +34,26 @@ paths:
   /api/auth/{provider}/callback:
     post:
       tags: [auth]
-      summary: Exchange a provider ID token for a ThreadLoop session
+      summary: Exchange a provider credential for a ThreadLoop session
+      description: |
+        Single endpoint that dispatches by `provider` path parameter.
+        The request body shape varies by provider (see `SsoCallbackInput`):
+          - `google`:   `{ id_token }`
+          - `apple`:    `{ id_token, code }`
+          - `facebook`: `{ access_token }`
+
+        On success, returns a `Session` and sets a `Set-Cookie: refresh_token=…`
+        header (httpOnly, Secure, SameSite=Lax, 30-day rolling lifetime).
+
+        On a verified-email collision with an existing account from a different
+        provider, returns `200` with `link_required: true` and a short-lived
+        `link_token`; the client should prompt the user to re-authenticate
+        with the original provider to confirm linking.
       parameters:
         - in: path
           name: provider
           required: true
-          schema: { type: string, enum: [google, apple, facebook] }
+          schema: { $ref: "#/components/schemas/AuthProvider" }
       requestBody:
         required: true
         content:
@@ -47,28 +61,69 @@ paths:
             schema: { $ref: "#/components/schemas/SsoCallbackInput" }
       responses:
         "200":
-          description: Session created. Refresh token set as httpOnly cookie.
+          description: |
+            Session created (or pending-link state — see `link_required`).
+            Refresh token set as httpOnly cookie when not pending-link.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Malformed request (missing required field for provider).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Provider token signature invalid or expired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Unknown provider in path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Provider JWKS unreachable; client should retry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/auth/refresh:
     post:
       tags: [auth]
       summary: Issue a new access token using the refresh cookie
+      description: |
+        Reads the `refresh_token` httpOnly cookie, rotates it (revoking the
+        old one server-side and issuing a new one), and returns a new access
+        JWT in the body. No request body.
+
+        Refresh-token reuse (an already-rotated token presented again) is
+        treated as likely token theft: all of that user's refresh tokens are
+        revoked and `401` is returned.
       responses:
         "200":
-          description: New session issued
+          description: New session issued; refresh cookie rotated.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          description: |
+            Missing, expired, revoked, or reused refresh token.
+            Client should restart the SSO flow.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/auth/logout:
     post:
       tags: [auth]
-      summary: Clear refresh cookie
+      summary: Revoke the current refresh token and clear the cookie
+      description: |
+        Revokes the refresh token associated with the current cookie and
+        unsets the cookie via `Set-Cookie: refresh_token=; Max-Age=0`.
+        Idempotent — returns `204` even if no cookie was sent.
       responses:
-        "204": { description: Logged out }
+        "204": { description: Logged out (cookie cleared). }
 
   /api/me:
     get:
@@ -81,6 +136,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Missing or invalid access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/listings:
     get:
@@ -191,36 +251,96 @@ components:
         redis:   { $ref: "#/components/schemas/DependencyStatus" }
         meili:   { $ref: "#/components/schemas/DependencyStatus" }
 
-    SsoCallbackInput:
+    Error:
       type: object
+      required: [code, message]
       properties:
-        id_token:     { type: string, description: "Google/Apple ID token" }
-        code:         { type: string, description: "Apple authorization code" }
-        access_token: { type: string, description: "Facebook access token" }
+        code:    { type: string, description: "Stable machine-readable error code." }
+        message: { type: string, description: "Human-readable detail; safe to surface." }
+        request_id:
+          type: string
+          description: "Server-assigned request id for log correlation."
+
+    AuthProvider:
+      type: string
+      enum: [google, apple, facebook]
+
+    GoogleSsoCallbackInput:
+      type: object
+      required: [id_token]
+      properties:
+        id_token: { type: string, description: "Google-issued ID token (JWT)." }
+
+    AppleSsoCallbackInput:
+      type: object
+      required: [id_token, code]
+      properties:
+        id_token: { type: string, description: "Apple-issued ID token (JWT)." }
+        code:     { type: string, description: "Apple authorization code; used to redeem an Apple refresh token server-side." }
+
+    FacebookSsoCallbackInput:
+      type: object
+      required: [access_token]
+      properties:
+        access_token: { type: string, description: "Facebook user access token (resolved against Graph API server-side)." }
+
+    SsoCallbackInput:
+      description: |
+        Provider-specific request body. Backend validates against the variant
+        matching the `provider` path parameter.
+      oneOf:
+        - $ref: "#/components/schemas/GoogleSsoCallbackInput"
+        - $ref: "#/components/schemas/AppleSsoCallbackInput"
+        - $ref: "#/components/schemas/FacebookSsoCallbackInput"
 
     User:
       type: object
-      required: [id, provider, display_name, can_sell, can_purchase]
+      required: [id, provider, display_name, email_verified, can_sell, can_purchase, created_at, updated_at]
       properties:
         id:             { type: string, format: uuid }
-        provider:       { type: string, enum: [google, apple, facebook] }
-        email:          { type: string, nullable: true }
+        provider:       { $ref: "#/components/schemas/AuthProvider" }
+        email:          { type: string, nullable: true, description: "May be null when Apple withholds the address." }
         email_verified: { type: boolean }
         display_name:   { type: string }
-        avatar_url:     { type: string, nullable: true }
+        avatar_url:     { type: string, nullable: true, format: uri }
         can_sell:       { type: boolean }
         can_purchase:   { type: boolean }
-        seller_rating:  { type: number, nullable: true }
+        seller_rating:  { type: number, nullable: true, minimum: 0, maximum: 5 }
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
     Session:
       type: object
-      required: [access_token, expires_at, user]
+      description: |
+        Result of a successful authentication. When `link_required` is `true`,
+        the existing-account collision flow has fired: `access_token`/`user`
+        are absent and the client must surface a "sign in with {existing
+        provider} to link" prompt, then submit `link_token` alongside the
+        re-auth result. On the happy path, `link_required` is `false` (or
+        omitted) and `access_token`/`expires_at`/`user` are all present.
+      required: [link_required]
       properties:
-        access_token: { type: string }
-        expires_at:   { type: string, format: date-time }
-        user:         { $ref: "#/components/schemas/User" }
+        access_token:
+          type: string
+          description: "Short-lived (15 min) access JWT. Absent when link_required is true."
+        expires_at:
+          type: string
+          format: date-time
+          description: "Access token expiry. Absent when link_required is true."
+        user:
+          allOf:
+            - $ref: "#/components/schemas/User"
+          description: "Authenticated user. Absent when link_required is true."
+        link_required:
+          type: boolean
+          default: false
+          description: "True when the email collides with an existing account from a different provider; client must prompt the user to re-authenticate with that provider to link."
+        link_provider:
+          $ref: "#/components/schemas/AuthProvider"
+          description: "Existing provider the user must re-authenticate with. Present iff link_required is true."
+        link_token:
+          type: string
+          description: "Short-lived token submitted alongside the linking re-auth to confirm the merge. Present iff link_required is true."
 
     ListingImage:
       type: object
