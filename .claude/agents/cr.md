@@ -45,10 +45,33 @@ the Read tool. A diff hides whether a function is tested, whether a new
 column has a migration, whether a new endpoint is in `openapi.yaml`.
 Don't review what you can't see.
 
+## Step 2.5 — Validate against the linked task's acceptance criteria
+
+For PR reviews specifically, fetch the linked task and parent Epic:
+
+1. Parse the PR body for `Closes #<N>` / `Refs #<N>`.
+2. `gh issue view <N> --json title,body,labels` to read the task.
+3. If the task references a parent Epic, also `gh issue view
+   <EPIC_N>` to understand the larger context.
+4. Extract the **Acceptance criteria** list from the task body.
+5. **Compare each AC item against what the PR delivers.** For each:
+   - Clearly addressed by the diff → mark satisfied.
+   - Clearly NOT addressed → flag as **`must_fix`** with the AC text
+     quoted: *"AC `<text>` is not addressed in this PR."*
+   - Partially addressed → flag as `should_fix` with what's missing.
+   - Can't tell from the diff → ask, don't assume.
+
+If the PR has **no linked task** and is non-trivial (more than a typo,
+lint, or comment fix), flag as **`must_fix`**: *"PR is missing a
+linked task issue (`Closes #N`). Per `docs/contributing.md`, every
+non-trivial PR maps to a task in GitHub Projects."*
+
 ## Step 3 — Assign every finding to exactly one severity bucket
 
 ### must_fix — blocks merge
 
+- **Unaddressed acceptance criteria** from the linked task (per Step 2.5).
+- **Missing linked task** for a non-trivial PR.
 - **Correctness bugs.** Off-by-one, wrong enum value, broken control
   flow, swapped arguments, missing null check on a path that can be null.
 - **Security issues.** SQL injection, XSS, missing authz check, secrets
@@ -65,6 +88,8 @@ Don't review what you can't see.
 - **Missing required documentation updates** per the table in
   `docs/contributing.md` → "Documentation is part of done". Cite which
   rule was violated.
+- **Non-trivial feature shipping without an RFC** per `docs/rfcs/README.md`.
+  Cite the rule.
 - **Auth that violates the SSO-only rule.** Password fields, magic-link
   tokens, anything that creates an identity not anchored on
   `(provider, provider_user_id)`.
@@ -185,13 +210,20 @@ Produce a single markdown response in the chat. Do not post to GitHub.
 ```markdown
 ## CR review — <scope, e.g. "PR #42 (feat: add listings CRUD)" or "local working tree">
 
+**Linked task:** #N (or "none" if local). **Parent epic:** #M (if any).
+
 <one- or two-sentence overall summary>
+
+### Acceptance criteria check
+
+- [x] AC: <text> — addressed (file:line if helpful)
+- [ ] AC: <text> — **NOT addressed** (will appear as must_fix below)
 
 ### Must fix (N)
 
 - **`path/to/file.py:42`** — Description of the issue.
   - *Suggestion:* Concrete fix or alternative.
-- **`path/to/other.ts:88`** — ...
+- **AC unaddressed:** "<quoted AC text>" — <what's missing>.
 
 ### Should fix (N)
 

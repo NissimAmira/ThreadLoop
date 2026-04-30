@@ -10,6 +10,8 @@
 | [`search.md`](./search.md) | Meilisearch integration, the `SearchService` interface, swap path to/from Postgres FTS. |
 | [`assets.md`](./assets.md) | Image upload pipeline, AR `.glb` processing, CDN strategy. |
 | [`devops-roadmap.md`](./devops-roadmap.md) | Phased deployment / monitoring / k8s plan with explicit triggers. **Scan it whenever a deployment/infra/performance topic comes up** — it tells you when to introduce each capability. |
+| [`rfcs/`](./rfcs/) | Design proposals for non-trivial product/architectural changes. Numbered, append-only. See `rfcs/README.md` for when to write one. |
+| [`adrs/`](./adrs/) | Architecture Decision Records. Short, focused "we decided X because Y" entries. See `adrs/README.md`. |
 
 The two contract documents live at the **repo root** because they're shared with non-developers and tooling:
 

@@ -1,0 +1,58 @@
+name: Bug
+description: Something is broken or behaving incorrectly.
+title: "[Bug] "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What's broken
+      description: One paragraph. Include the affected route / page / flow.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Numbered steps. Include any data needed.
+      placeholder: |
+        1. Sign in with Apple using Hide-My-Email
+        2. Sign out
+        3. Try to sign in again with the same Apple account
+        4. Observe: 500 / wrong account / etc.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: Branch / version / OS / browser, as relevant.
+      placeholder: main @ v1.2.0, Chrome 120 on macOS
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Paste relevant error output. Redact secrets.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - S0 — production down / data loss
+        - S1 — major flow broken, no workaround
+        - S2 — flow broken, workaround exists
+        - S3 — minor / cosmetic
+    validations:
+      required: true

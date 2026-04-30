@@ -1,6 +1,24 @@
+## Linked work
+
+<!-- Required for non-trivial PRs. Trivial PRs (typo fix, lint, etc.) can strike this section through. -->
+
+- **Closes:** #<task-id>
+- **Refs (epic):** #<epic-id>
+- **RFC:** docs/rfcs/<file>.md (if any)
+
 ## Summary
 
 <!-- 1-3 bullets describing what this PR changes and why -->
+
+## Acceptance criteria from the linked task
+
+<!--
+Copy the AC list from the linked task issue. Tick each as the PR addresses it.
+The CR subagent compares this list against the diff — leaving an unticked
+item without explanation will be flagged as must_fix.
+-->
+
+- [ ] ...
 
 ## Scope
 

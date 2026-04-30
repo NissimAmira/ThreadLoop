@@ -1,0 +1,71 @@
+name: Epic
+description: A user-visible feature, broken down later into BE/FE/Test/Infra sub-tasks.
+title: "[Epic] "
+labels: ["type:epic"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Epics live at the **product** level — what should we build and why.
+        The technical breakdown comes later (the `tech-lead` subagent
+        produces it from this epic). For non-trivial epics, link the
+        accompanying RFC in `docs/rfcs/`.
+  - type: input
+    id: rfc
+    attributes:
+      label: RFC
+      description: Path to the design doc, if one exists.
+      placeholder: docs/rfcs/0001-auth-sso.md
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user need are we solving? What's broken or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: stories
+    attributes:
+      label: User stories
+      description: One per line, in "As X, I want Y, so that Z" form.
+      placeholder: |
+        - As a buyer, I want to sign in with Google so that I don't have to remember a password.
+        - As a seller, I want my Apple-private-relay email to map to my account so that signing back in still works.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, verifiable outcomes. Reviewers and the CR subagent compare PRs against this list.
+      placeholder: |
+        - [ ] User can sign in via Google, Apple, and Facebook on web
+        - [ ] User can sign in on mobile using native flows on iOS and Android
+        - [ ] Apple Hide-My-Email relay addresses are handled and don't break account linking
+        - [ ] Session expires after 30 days of inactivity; refresh token issued for active sessions
+        - [ ] /api/me returns the authenticated user
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Explicit non-goals — things adjacent reviewers might assume but we are NOT doing here.
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open questions
+      description: Things to decide before tech-lead breaks this down.
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: What must already exist? What's downstream and waiting on this?
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: [P0, P1, P2, P3]
+      default: 2
+    validations:
+      required: true

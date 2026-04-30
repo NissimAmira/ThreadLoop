@@ -45,6 +45,9 @@ threadloop/
 │   └── branch-protection.md     Recommended branch protection settings
 │
 ├── docs/                 Long-form documentation (this folder)
+│   ├── rfcs/                 Design proposals for non-trivial changes
+│   └── adrs/                 Architecture Decision Records
+├── .claude/agents/       Dev-cycle subagents (pm/tech-lead/*-dev/cr)
 ├── system_design.md      API contracts + SQL schema
 ├── CLAUDE.md             AI quick-reference
 ├── Makefile              `make dev` / `make test` / `make migrate` / …
