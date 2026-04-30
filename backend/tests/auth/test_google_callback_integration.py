@@ -67,6 +67,7 @@ def auth_client(pg_url: str) -> Iterator[TestClient]:
             session.close()
 
     test_settings = Settings(
+        auth_enabled=True,
         database_url=pg_url,
         jwt_signing_key="test-jwt-signing-key",
         refresh_token_hmac_key="test-hmac-key",
@@ -143,10 +144,7 @@ def test_new_user_signin_creates_user_and_refresh_row(
         user_id = users[0][0]
 
         rows = conn.execute(
-            text(
-                "SELECT user_id, token_hash, revoked_at FROM refresh_tokens "
-                "WHERE user_id = :uid"
-            ),
+            text("SELECT user_id, token_hash, revoked_at FROM refresh_tokens WHERE user_id = :uid"),
             {"uid": user_id},
         ).all()
         assert len(rows) == 1
@@ -239,18 +237,55 @@ def test_jwks_unreachable_returns_503(
     assert resp.json()["detail"]["code"] == "jwks_unavailable"
 
 
-def test_unknown_provider_in_path_returns_501(auth_client: TestClient) -> None:
+def test_not_yet_implemented_provider_returns_404(auth_client: TestClient) -> None:
     """`apple` and `facebook` are valid provider names per the OpenAPI enum
-    but their callbacks don't ship in this PR. 501 is the temporary signal
-    until #15 / #16 wire them up."""
+    but their callbacks don't ship in this PR. The dispatcher accepts the
+    body as a raw dict and matches the provider branch BEFORE validating any
+    body shape, so the response is 404 with `code: provider_not_implemented`
+    regardless of what the body looks like. Once #15 / #16 land they replace
+    the 404 branch with real handlers — no OpenAPI change needed since 404
+    is already in the spec for this path."""
     resp = auth_client.post(
         "/api/auth/apple/callback",
         json={"id_token": "anything", "code": "ignored"},
     )
-    # Pydantic rejects the body shape first (no `code` field on Google
-    # variant). Either 422 (validation) or 501 (unimplemented) is acceptable
-    # — we just want it not to be a 500 or a hidden DB write.
-    assert resp.status_code in (422, 501)
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "provider_not_implemented"
+
+
+def test_auth_disabled_returns_404(
+    auth_client: TestClient,
+    google_id_token: Callable[..., str],
+) -> None:
+    """RFC 0001 § Rollout plan step 1: every `/api/auth/*` route returns 404
+    when `AUTH_ENABLED=false`. Override the test settings to flip the flag
+    off and confirm the route disappears even with an otherwise-valid body."""
+    test_settings = Settings(
+        auth_enabled=False,
+        database_url="postgresql+psycopg://x:x@nope/x",
+        jwt_signing_key="test-jwt-signing-key",
+        refresh_token_hmac_key="test-hmac-key",
+        google_client_id=GOOGLE_AUD,
+        refresh_cookie_secure=False,
+    )
+    app.dependency_overrides[get_settings] = lambda: test_settings
+    try:
+        resp = auth_client.post(
+            "/api/auth/google/callback",
+            json={"id_token": google_id_token(aud=GOOGLE_AUD)},
+        )
+    finally:
+        # Restore the auth-enabled override so subsequent tests in this
+        # session see the auth_client default.
+        app.dependency_overrides[get_settings] = lambda: Settings(
+            auth_enabled=True,
+            database_url=test_settings.database_url,
+            jwt_signing_key="test-jwt-signing-key",
+            refresh_token_hmac_key="test-hmac-key",
+            google_client_id=GOOGLE_AUD,
+            refresh_cookie_secure=False,
+        )
+    assert resp.status_code == 404
 
 
 def test_truly_unknown_provider_returns_404_or_422(auth_client: TestClient) -> None:

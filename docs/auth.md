@@ -11,6 +11,33 @@ ThreadLoop is **SSO-only**. There are no passwords stored anywhere.
 - **Fewer flows to maintain** — no signup form, password reset, email
   verification, MFA enrollment, etc.
 
+## Feature flag — `AUTH_ENABLED`
+
+Per RFC 0001 § Rollout plan step 1, the entire auth subsystem ships behind a
+single boolean flag. While `AUTH_ENABLED=false` (the default), every
+`/api/auth/*` route returns 404 — the implementation is in the binary but
+unreachable. This lets us land each provider, the refresh / logout / `/me`
+work, and account-linking incrementally without exposing half-built flows.
+
+The flag is enforced as a router-level FastAPI dependency
+(`require_auth_enabled` in `app/routers/auth.py`), not by conditionally
+registering the router, so OpenAPI generation stays honest — the routes
+still appear in `/docs` and the contract doesn't lie about what the
+deployed binary will look like once the flag is flipped.
+
+When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless all of
+`GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, and `REFRESH_TOKEN_HMAC_KEY` are set
+non-empty. This catches the common misconfiguration where an unset
+`GOOGLE_CLIENT_ID` would silently make every sign-in look like "your token
+is invalid" (401) when the real fault is server config.
+
+Rollout sequence (RFC 0001):
+1. Implementation lands flag-off.
+2. Web sign-in page lands flag-off.
+3. Flag flipped on in **staging** (Phase 2 of the DevOps roadmap).
+4. Mobile sign-in lands flag-off.
+5. Flag flipped on in **prod** once all three platforms validate in staging.
+
 ## Supported providers
 
 | Provider | SDK (web) | SDK (mobile) | Notes |
@@ -132,12 +159,22 @@ unrelated identity (otherwise an attacker could claim arbitrary emails).
 The collision response carries a short-lived `link_token`. **Storage choice:
 the `link_token` is a stateless signed JWT** (HS256 with `JWT_SIGNING_KEY`,
 `typ=link`, 10-minute TTL by default). It carries the existing user's id, the
-second provider, the second-provider `sub`, and the verified email. No
-server-side state to clean up; revocation isn't a concern at this TTL.
-Alternatives considered: a Redis short-TTL entry (rejected — adds infra
-dependency to the auth path; Redis isn't yet wired into the app layer beyond
-health checks), a `link_intents` table (rejected — durable but overkill for a
-self-resolving 5–10 minute flow that would also need a sweeper).
+second provider, the second-provider `sub`, the verified email, and a unique
+`jti` (uuid4 hex). No server-side state to clean up; revocation isn't a
+concern at this TTL. Alternatives considered: a Redis short-TTL entry
+(rejected — adds infra dependency to the auth path; Redis isn't yet wired
+into the app layer beyond health checks), a `link_intents` table (rejected —
+durable but overkill for a self-resolving 5–10 minute flow that would also
+need a sweeper).
+
+**Single-use enforcement.** Without a `jti`, a leaked `link_token` would be
+replayable for the full TTL. The `jti` claim is added at issue time in this
+PR (#14); the **consumer** (#18, `POST /api/auth/link`) is responsible for
+recording each consumed `jti` in `consumed_link_tokens` (or short-TTL Redis
+SETEX keyed on `jti`) and rejecting replays. Decoding via
+`app.auth.link.decode_link_token` exposes the `jti` on `LinkTokenClaims`
+specifically so the consumer can do this; verification itself doesn't
+enforce single-use because that requires storage that doesn't exist yet.
 
 Resolution lives in **#18** (`POST /api/auth/link`), which validates the
 `link_token`, requires fresh re-authentication with the original provider,

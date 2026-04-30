@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,13 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://localhost:19006"
 
     # --- Auth (SSO + sessions) ---
+    # Master feature flag for the auth subsystem. Per RFC 0001 § Rollout plan
+    # step 1, every `/api/auth/*` route returns 404 while this is False so we
+    # can land the implementation behind a flag and flip it per environment.
+    # Production deploys must set this to True after RFC 0001 § Rollout plan
+    # step 5; flipped in staging earlier per step 3.
+    auth_enabled: bool = False
+
     # HS256 signing key for access JWTs and link tokens. Must be set to a
     # cryptographically random value in any non-dev environment; the default
     # value is deliberately obviously-fake so misconfigured deploys fail loudly.
@@ -46,6 +54,31 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _require_auth_secrets_when_enabled(self) -> "Settings":
+        """When `auth_enabled=True`, refuse to boot with empty auth secrets.
+
+        An unset `google_client_id` would silently make every Google sign-in
+        look like "your token is invalid" (401) when the real fault is server
+        misconfiguration. Same for the JWT and refresh-HMAC keys: a missing
+        secret would mean signed-with-the-empty-string. Fail loudly at
+        `Settings()` construction instead.
+        """
+        if self.auth_enabled:
+            missing: list[str] = []
+            if not self.google_client_id:
+                missing.append("GOOGLE_CLIENT_ID")
+            if not self.jwt_signing_key:
+                missing.append("JWT_SIGNING_KEY")
+            if not self.refresh_token_hmac_key:
+                missing.append("REFRESH_TOKEN_HMAC_KEY")
+            if missing:
+                raise ValueError(
+                    "AUTH_ENABLED=true but the following auth secrets are unset: "
+                    + ", ".join(missing)
+                )
+        return self
 
 
 @lru_cache

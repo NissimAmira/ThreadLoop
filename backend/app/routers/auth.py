@@ -4,6 +4,10 @@ Wire format follows `POST /api/auth/{provider}/callback` in
 `shared/openapi.yaml`. This task (#14) implements the `google` branch only —
 `apple` (#15) and `facebook` (#16) plug into the same dispatcher.
 
+The whole router is gated behind `Settings.auth_enabled` per RFC 0001 §
+Rollout plan step 1: every route returns 404 while the flag is off so we can
+land the implementation environment-by-environment.
+
 The 'find-or-create user' + 'detect cross-provider email collision' logic
 lives here; everything cryptographic is in `app.auth.google` (token verify),
 `app.auth.session` (mint + cookie), and `app.auth.link` (pending-link token).
@@ -12,9 +16,10 @@ lives here; everything cryptographic is in `app.auth.google` (token verify),
 from __future__ import annotations
 
 import logging
-from typing import Literal, cast
+from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Response, status
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
@@ -32,7 +37,26 @@ from app.models import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+
+def require_auth_enabled(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    """Gate every route on this router. Returns 404 (not 503) when the flag
+    is off so an unauthenticated probe can't even tell the subsystem exists.
+
+    Attached as a router-level dependency rather than baked into each handler
+    so OpenAPI generation still describes the routes — `/docs` stays honest
+    about what the API surface will look like once the flag is flipped.
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["auth"],
+    dependencies=[Depends(require_auth_enabled)],
+)
 
 _KNOWN_PROVIDERS: frozenset[str] = frozenset({"google", "apple", "facebook"})
 
@@ -50,11 +74,17 @@ def _http_error(code: str, message: str, http_status: int) -> HTTPException:
 )
 def sso_callback(
     response: Response,
-    body: GoogleSsoCallbackInput,
+    body: Annotated[dict[str, Any], Body(...)],
     provider: Literal["google", "apple", "facebook"] = Path(...),
     db: DbSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Session:
+    """Dispatch by provider name. The body is intentionally typed as a raw
+    dict here so we can return 404 for not-yet-implemented providers BEFORE
+    spending Pydantic cycles validating a body shape that doesn't match the
+    branch we're about to take. Each branch validates its own body via the
+    matching Pydantic schema as the first thing it does.
+    """
     if provider not in _KNOWN_PROVIDERS:
         # Unreachable while `provider` is constrained by Literal, but kept
         # as a defense in depth and to match the OpenAPI 404 contract.
@@ -65,18 +95,28 @@ def sso_callback(
         )
 
     if provider != "google":
-        # #15 (apple) and #16 (facebook) will replace this with a real impl;
-        # 501 is the right semantic for "route exists, mechanism not yet
-        # wired up". Keeps the dispatch table honest until those land.
+        # #15 (apple) and #16 (facebook) will replace this with a real impl.
+        # 404 with a stable `code` is the right semantic per the OpenAPI
+        # contract (200/400/401/404/503 for this path) — 501 would be drift.
+        # Once those PRs land they replace this branch with a real handler.
         raise _http_error(
             "provider_not_implemented",
             f"Provider {provider!r} is not yet implemented.",
-            status.HTTP_501_NOT_IMPLEMENTED,
+            status.HTTP_404_NOT_FOUND,
         )
 
-    return _handle_google_callback(
-        body=body, response=response, db=db, settings=settings
-    )
+    try:
+        google_body = GoogleSsoCallbackInput.model_validate(body)
+    except ValidationError as exc:
+        # Surface as 422 (FastAPI's default for body validation), matching
+        # the behaviour FastAPI would have produced if we'd typed `body` as
+        # `GoogleSsoCallbackInput` directly.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from None
+
+    return _handle_google_callback(body=google_body, response=response, db=db, settings=settings)
 
 
 def _handle_google_callback(
@@ -108,9 +148,7 @@ def _handle_google_callback(
         ) from None
 
     existing = db.execute(
-        select(User).where(
-            User.provider == "google", User.provider_user_id == identity.sub
-        )
+        select(User).where(User.provider == "google", User.provider_user_id == identity.sub)
     ).scalar_one_or_none()
 
     if existing is None and identity.email and identity.email_verified:
