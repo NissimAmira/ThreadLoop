@@ -63,7 +63,33 @@ users (
     updated_at        timestamptz not null default now(),
     UNIQUE (provider, provider_user_id)
 );
+
+refresh_tokens (
+    id           uuid primary key,
+    user_id      uuid not null references users(id) on delete cascade,
+    token_hash   bytea not null unique,               -- hash of the opaque token; plaintext never stored
+    issued_at    timestamptz not null default now(),
+    expires_at   timestamptz not null,                -- 30 days from issued_at
+    revoked_at   timestamptz                          -- null = active; non-null = revoked
+);
+CREATE INDEX ix_refresh_tokens_user_id ON refresh_tokens(user_id);
 ```
+
+### Refresh-token semantics
+
+- **Opaque + hashed at rest.** The token sent to the client is a random
+  opaque string; only its hash lives in `refresh_tokens.token_hash`. Comparison
+  is hash-of-incoming vs stored hash. The exact hash function is owned by the
+  callback / refresh route (#14–#17) — it is not part of the schema.
+- **Rotation.** Every `/api/auth/refresh` revokes the row in use
+  (`revoked_at = now()`) and inserts a fresh one. The cookie is rewritten.
+- **Reuse detection.** If a request arrives bearing a token whose row is
+  already `revoked_at IS NOT NULL`, the route revokes **all** of that
+  `user_id`'s refresh tokens and returns `401`. This is the theft response
+  from RFC 0001 § Failure modes.
+- **Logout.** Revokes the current row only (`revoked_at = now()`).
+- **Cascade.** `ON DELETE CASCADE` on `user_id` — deleting a user (when the
+  GDPR-deletion epic ships) removes their tokens automatically.
 
 ## Account linking
 
@@ -114,12 +140,17 @@ re-authenticating.
 ## What's not implemented yet
 
 The scaffold has the schema and the abstract design. Wiring lands in
-`feat/auth-sso`:
+`feat/auth-sso` (Epic #11):
 - Provider SDK integration (web + mobile)
-- `/api/auth/*` routes
-- Session JWT + refresh-cookie middleware
-- Account-linking flow
+- `/api/auth/*/callback` routes (Google #14, Apple #15, Facebook #16)
+- `/api/auth/refresh` + `/api/auth/logout` + `/api/me` + session middleware (#17)
+- Account-linking flow (#18)
 - `require_buyer` / `require_seller` dependencies
 
-Until that PR ships, `users` rows can be inserted via Alembic seed data for
-local development.
+Already landed:
+- OpenAPI + TS contract for the auth endpoints (#12, PR #26).
+- `refresh_tokens` table + `RefreshToken` model with rotation/expiry/revocation
+  helpers (#22, this PR).
+
+Until the callback routes ship, `users` rows can be inserted via Alembic seed
+data for local development.

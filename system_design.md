@@ -153,6 +153,25 @@ Indexes: `(status, created_at desc)`, GIN on `search_tsv`, `(brand)`, `(category
 | `updated_at` | timestamptz default now() | |
 | | CHECK (`buyer_id <> seller_id`) | |
 
+### `refresh_tokens`
+
+Server-side record of issued refresh tokens. Plaintext tokens are never
+stored — only their hash. Rotation: the row in use is marked
+`revoked_at = now()` and a fresh row is inserted on each `/api/auth/refresh`.
+Reuse of a revoked token signals likely theft and triggers revocation of
+every row for that `user_id`. See [RFC 0001 § Schema additions](./docs/rfcs/0001-auth-sso.md).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid pk | |
+| `user_id` | uuid fk → users(id) on delete cascade | indexed |
+| `token_hash` | bytea not null unique | hash of the opaque random token; never stored plaintext |
+| `issued_at` | timestamptz not null default now() | |
+| `expires_at` | timestamptz not null | 30 days from `issued_at` per RFC 0001 |
+| `revoked_at` | timestamptz | null = active; non-null = revoked (logout, rotation, theft response) |
+
+Indexes: `ix_refresh_tokens_user_id` for "revoke all tokens for user X".
+
 ---
 
 ## 4. API contracts
