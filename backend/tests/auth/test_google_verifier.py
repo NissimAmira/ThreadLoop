@@ -158,3 +158,125 @@ def test_jwks_cache_is_used_within_ttl(
     verify_google_id_token(token, expected_audience=GOOGLE_AUD)
     verify_google_id_token(token, expected_audience=GOOGLE_AUD)
     assert fetch_count == 1, "JWKS should be cached across calls within TTL"
+
+
+def test_rotation_invalidates_stale_cache_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google rotates its JWKS keys on a multi-day cadence. If a token is
+    signed by the *new* key but our cache holds the *old* JWKS, the first
+    verification fails — we must invalidate and retry once, which re-fetches
+    a JWKS containing the new key, and then succeed."""
+    import json
+    import time
+
+    import httpx
+    from authlib.jose import JsonWebKey
+    from authlib.jose import jwt as authlib_jwt
+
+    from tests.auth.conftest import GoogleJwksPair
+
+    # Two distinct RSA keypairs, simulating rotation.
+    def _make_pair(kid: str) -> GoogleJwksPair:
+        private = JsonWebKey.generate_key("RSA", 2048, is_private=True)
+        private_dict = private.as_dict(is_private=True)
+        private_dict["kid"] = kid
+        private_dict["alg"] = "RS256"
+        private_dict["use"] = "sig"
+        public_dict = {
+            k: v for k, v in private_dict.items() if k not in ("d", "p", "q", "dp", "dq", "qi")
+        }
+        public_dict["kid"] = kid
+        public_dict["alg"] = "RS256"
+        public_dict["use"] = "sig"
+        jwks = {"keys": [public_dict]}
+
+        def sign(payload: dict[str, object]) -> str:
+            header = {"alg": "RS256", "kid": kid}
+            encoded = authlib_jwt.encode(header, payload, private_dict)
+            return encoded.decode("ascii") if isinstance(encoded, bytes) else encoded
+
+        return GoogleJwksPair(
+            private_jwk=JsonWebKey.import_key(private_dict),
+            jwks=jwks,
+            sign=sign,
+        )
+
+    old_pair = _make_pair("kid-old")
+    new_pair = _make_pair("kid-new")
+
+    # Token signed by the NEW key.
+    now_ts = int(time.time())
+    token_signed_by_new = new_pair.sign(
+        {
+            "sub": "abc-123",
+            "aud": GOOGLE_AUD,
+            "iss": "https://accounts.google.com",
+            "iat": now_ts,
+            "exp": now_ts + 3600,
+            "email": "rot@example.com",
+            "email_verified": True,
+        }
+    )
+
+    # JWKS endpoint serves OLD on first hit, NEW on every subsequent hit —
+    # mimicking the real rotation timing.
+    fetch_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal fetch_count
+        fetch_count += 1
+        if fetch_count == 1:
+            return httpx.Response(200, content=json.dumps(old_pair.jwks))
+        return httpx.Response(200, content=json.dumps(new_pair.jwks))
+
+    cache = _JwksCache(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(google_module, "_default_cache", cache)
+
+    identity = verify_google_id_token(token_signed_by_new, expected_audience=GOOGLE_AUD)
+
+    assert identity.sub == "abc-123"
+    assert fetch_count == 2, "verifier must invalidate the stale cache and refetch once"
+
+
+def test_rotation_retry_does_not_paper_over_genuinely_bad_tokens(
+    google_id_token: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the second JWKS fetch returns the same keys, a tampered signature
+    must still be rejected — the retry-on-failure path must not become a
+    silent acceptor."""
+    import json
+
+    import httpx
+
+    from app.auth.google import _JwksCache as _Cache
+
+    # Borrow the existing google_id_token fixture to mint a valid token,
+    # then tamper its signature so it can't be verified by any key in the
+    # JWKS.
+    token = google_id_token()
+    parts = token.split(".")
+    swapped_char = "A" if parts[2][0] != "A" else "B"
+    bad = ".".join([parts[0], parts[1], swapped_char + parts[2][1:]])
+
+    # Pull the JWKS the autouse cache would have served.
+    autouse_cache = google_module._default_cache  # type: ignore[attr-defined]
+    jwks = autouse_cache.get()  # warms cache; returns the test JWKS
+
+    fetch_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal fetch_count
+        fetch_count += 1
+        return httpx.Response(200, content=json.dumps(jwks))
+
+    cache = _Cache(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(google_module, "_default_cache", cache)
+
+    with pytest.raises(InvalidGoogleTokenError):
+        verify_google_id_token(bad, expected_audience=GOOGLE_AUD)
+
+    # Two fetches: the initial verification fails, the retry refetches and
+    # fails again, and the second failure propagates as expected.
+    assert fetch_count == 2

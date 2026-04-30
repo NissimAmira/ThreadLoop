@@ -19,6 +19,7 @@ Token shape (HS256):
     sub  = existing user id (UUID string)
     iat  = issued-at (epoch seconds)
     exp  = expiry (epoch seconds)
+    jti  = unique token id (uuid4 hex) — caller MUST enforce single-use
     typ  = "link"
     new_provider          = "google" | "apple" | "facebook"
     new_provider_user_id  = the `sub` from the second-provider token
@@ -47,6 +48,9 @@ class LinkTokenClaims:
     new_provider_user_id: str
     new_email: str
     expires_at: datetime
+    # Unique per issuance. Callers (#18) MUST record consumed `jti`s and
+    # reject replays — see `decode_link_token` for the contract.
+    jti: str
 
 
 def issue_link_token(
@@ -58,13 +62,20 @@ def issue_link_token(
     settings: Settings,
     now: datetime | None = None,
 ) -> tuple[str, datetime]:
-    """Mint a pending-link token. Returns (encoded_jwt, expires_at)."""
+    """Mint a pending-link token. Returns (encoded_jwt, expires_at).
+
+    Each issuance gets a fresh `jti` (uuid4 hex). Without `jti`, a leaked
+    link token is replayable for the full TTL — adding the claim here makes
+    it cheap for #18 to enforce single-use later (record the consumed `jti`
+    in `consumed_link_tokens` or short-TTL Redis SETEX).
+    """
     issued_at = now if now is not None else datetime.now(UTC)
     expires_at = issued_at + timedelta(seconds=settings.link_token_ttl_seconds)
     payload = {
         "sub": str(existing_user_id),
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
+        "jti": uuid.uuid4().hex,
         "typ": _TOKEN_TYPE,
         "new_provider": new_provider,
         "new_provider_user_id": new_provider_user_id,
@@ -85,7 +96,13 @@ def decode_link_token(
 ) -> LinkTokenClaims:
     """Verify signature + expiry on a pending-link token. Raises
     `JoseError` (signature / parse) or `LinkTokenExpiredError` (expiry).
-    Consumed by #18 (`POST /api/auth/link`)."""
+    Consumed by #18 (`POST /api/auth/link`).
+
+    Caller MUST enforce single-use by recording the `jti` of consumed
+    tokens (in #18: `consumed_link_tokens` table or short-TTL Redis
+    SETEX). This function only verifies signature/typ/expiry/structure;
+    replay protection is the consumer's responsibility.
+    """
     try:
         claims = jwt.decode(token, settings.jwt_signing_key)
     except JoseError:
@@ -103,6 +120,10 @@ def decode_link_token(
     except (KeyError, ValueError) as exc:
         raise LinkTokenInvalidError("link token missing or malformed sub") from exc
 
+    jti_raw = claims.get("jti")
+    if not isinstance(jti_raw, str) or not jti_raw:
+        raise LinkTokenInvalidError("link token missing or malformed jti")
+
     expires_at = datetime.fromtimestamp(float(exp), tz=UTC)
     return LinkTokenClaims(
         existing_user_id=existing_user_id,
@@ -110,6 +131,7 @@ def decode_link_token(
         new_provider_user_id=str(claims["new_provider_user_id"]),
         new_email=str(claims["new_email"]),
         expires_at=expires_at,
+        jti=jti_raw,
     )
 
 

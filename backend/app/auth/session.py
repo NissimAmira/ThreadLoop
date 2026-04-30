@@ -136,9 +136,7 @@ def set_refresh_cookie(
         max_age=settings.refresh_token_ttl_days * 24 * 60 * 60,
         httponly=True,
         secure=settings.refresh_cookie_secure,
-        samesite=cast(
-            Literal["lax", "strict", "none"], settings.refresh_cookie_samesite
-        ),
+        samesite=cast(Literal["lax", "strict", "none"], settings.refresh_cookie_samesite),
         domain=settings.refresh_cookie_domain,
         path="/",
     )
@@ -153,11 +151,14 @@ def issue_session(
     now: datetime | None = None,
 ) -> IssuedSession:
     """One-shot helper: mint access JWT + refresh token, persist the
-    refresh row, set the cookie. Used by every successful callback."""
+    refresh row, set the cookie. Used by every successful callback.
+
+    Flushes the new refresh-token row but does not commit; caller is
+    responsible for committing the transaction. (Same contract as
+    `mint_refresh_token`, propagated up.)
+    """
     access_token, access_expires_at = mint_access_token(user, settings=settings, now=now)
-    refresh_plaintext, refresh_row = mint_refresh_token(
-        user, db=db, settings=settings, now=now
-    )
+    refresh_plaintext, refresh_row = mint_refresh_token(user, db=db, settings=settings, now=now)
     set_refresh_cookie(response, refresh_plaintext, settings=settings)
     return IssuedSession(
         access_token=access_token,

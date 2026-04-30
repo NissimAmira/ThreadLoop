@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 AuthProvider = Literal["google", "apple", "facebook"]
 
@@ -45,9 +45,11 @@ class Session(BaseModel):
     pending-link path; client distinguishes via `link_required`. We populate
     only the fields appropriate for each branch and let Pydantic's
     `exclude_none` semantics keep the payload tight.
-    """
 
-    model_config = ConfigDict(from_attributes=True)
+    Field optionality is enforced via `_check_branch_invariants` rather than
+    relying on caller discipline — a misrouted field would be silently
+    serialized today, and #18 / #17 are about to add more callers.
+    """
 
     link_required: bool = False
     access_token: str | None = None
@@ -55,3 +57,33 @@ class Session(BaseModel):
     user: UserOut | None = None
     link_provider: AuthProvider | None = None
     link_token: str | None = None
+
+    @model_validator(mode="after")
+    def _check_branch_invariants(self) -> Session:
+        """Enforce the discriminated-union shape implied by `link_required`.
+
+        - `link_required=True` → `link_provider` + `link_token` set;
+          `access_token` / `expires_at` / `user` must all be None.
+        - `link_required=False` → `access_token` + `expires_at` + `user` set;
+          `link_provider` / `link_token` must be None.
+
+        Raises `ValueError` so Pydantic surfaces it as a normal validation
+        error.
+        """
+        if self.link_required:
+            if self.link_provider is None or self.link_token is None:
+                raise ValueError("link_required=True requires link_provider and link_token")
+            if (
+                self.access_token is not None
+                or self.expires_at is not None
+                or self.user is not None
+            ):
+                raise ValueError(
+                    "link_required=True must not carry access_token / expires_at / user"
+                )
+        else:
+            if self.access_token is None or self.expires_at is None or self.user is None:
+                raise ValueError("link_required=False requires access_token, expires_at, and user")
+            if self.link_provider is not None or self.link_token is not None:
+                raise ValueError("link_required=False must not carry link_provider or link_token")
+        return self

@@ -96,3 +96,57 @@ def test_access_token_cannot_be_replayed_as_link_token() -> None:
 
     with pytest.raises(LinkTokenInvalidError):
         decode_link_token(forged, settings=settings)
+
+
+def test_each_issuance_carries_a_fresh_jti() -> None:
+    """Two link tokens minted with identical inputs MUST have distinct
+    `jti` claims. Without `jti`, a leaked link token is replayable for the
+    full TTL; the claim is what lets #18 enforce single-use later (record
+    consumed `jti`s in `consumed_link_tokens` / short-TTL Redis SETEX).
+    """
+    settings = _settings()
+    existing_user_id = uuid.uuid4()
+    kwargs = {
+        "existing_user_id": existing_user_id,
+        "new_provider": "google",
+        "new_provider_user_id": "google-sub-1",
+        "new_email": "carol@example.com",
+        "settings": settings,
+    }
+
+    token_a, _ = issue_link_token(**kwargs)  # type: ignore[arg-type]
+    token_b, _ = issue_link_token(**kwargs)  # type: ignore[arg-type]
+
+    claims_a = decode_link_token(token_a, settings=settings)
+    claims_b = decode_link_token(token_b, settings=settings)
+
+    assert claims_a.jti and claims_b.jti, "every link token must carry a jti"
+    assert claims_a.jti != claims_b.jti, "jti must be unique per issuance"
+
+
+def test_link_token_missing_jti_is_rejected() -> None:
+    """A token with no `jti` claim (e.g. forged with the legacy issuer
+    pre-#14-cr-fix) must be rejected by `decode_link_token`."""
+    from authlib.jose import jwt as authlib_jwt
+
+    settings = _settings()
+    now_ts = int(datetime.now(UTC).timestamp())
+    forged = authlib_jwt.encode(
+        {"alg": "HS256"},
+        {
+            "sub": str(uuid.uuid4()),
+            "iat": now_ts,
+            "exp": now_ts + 600,
+            "typ": "link",
+            "new_provider": "google",
+            "new_provider_user_id": "google-sub-1",
+            "new_email": "x@example.com",
+            # Note: no `jti` claim.
+        },
+        settings.jwt_signing_key,
+    )
+    if isinstance(forged, bytes):
+        forged = forged.decode("ascii")
+
+    with pytest.raises(LinkTokenInvalidError, match="jti"):
+        decode_link_token(forged, settings=settings)

@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from authlib.jose import JsonWebKey, jwt
@@ -61,10 +61,7 @@ class _JwksCache:
     def get(self, *, now: float | None = None) -> dict[str, Any]:
         current = now if now is not None else time.monotonic()
         with self._lock:
-            if (
-                self._jwks_raw is not None
-                and current - self._fetched_at < _JWKS_CACHE_TTL_SECONDS
-            ):
+            if self._jwks_raw is not None and current - self._fetched_at < _JWKS_CACHE_TTL_SECONDS:
                 return self._jwks_raw
             self._jwks_raw = self._fetch()
             self._fetched_at = current
@@ -99,6 +96,25 @@ def get_default_cache() -> _JwksCache:
     return _default_cache
 
 
+def _verify_against_key_set(
+    id_token: str,
+    *,
+    jwks_raw: dict[str, Any],
+    now: float | None,
+) -> dict[str, Any]:
+    """Run JOSE signature + claim validation against `jwks_raw`. Raises
+    `InvalidGoogleTokenError` on any cryptographic / semantic failure."""
+    try:
+        key_set = JsonWebKey.import_key_set(jwks_raw)
+        claims = jwt.decode(id_token, key_set)
+        claims.validate(now=int(now) if now is not None else None)
+    except JoseError as exc:
+        raise InvalidGoogleTokenError(f"token verification failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - authlib raises mixed exception types
+        raise InvalidGoogleTokenError(f"token verification failed: {exc}") from exc
+    return cast(dict[str, Any], claims)
+
+
 def verify_google_id_token(
     id_token: str,
     *,
@@ -110,6 +126,13 @@ def verify_google_id_token(
 
     Raises `JwksUnavailableError` if Google's JWKS can't be fetched and
     `InvalidGoogleTokenError` for any cryptographic / semantic failure.
+
+    Rotation handling: Google rotates its signing keys roughly every few
+    days. If the cached JWKS doesn't contain the key the token was signed
+    with, the first verification fails with `InvalidGoogleTokenError`. We
+    invalidate the cache and retry exactly once — that re-fetches a fresh
+    JWKS that should contain the new key. Two failures in a row are treated
+    as a genuinely bad token and propagated.
     """
     if not expected_audience:
         # Refuse to "verify" against an empty audience — that would silently
@@ -120,13 +143,13 @@ def verify_google_id_token(
     jwks_raw = jwks_cache.get(now=now)
 
     try:
-        key_set = JsonWebKey.import_key_set(jwks_raw)
-        claims = jwt.decode(id_token, key_set)
-        claims.validate(now=int(now) if now is not None else None)
-    except JoseError as exc:
-        raise InvalidGoogleTokenError(f"token verification failed: {exc}") from exc
-    except Exception as exc:  # noqa: BLE001 - authlib raises mixed exception types
-        raise InvalidGoogleTokenError(f"token verification failed: {exc}") from exc
+        claims = _verify_against_key_set(id_token, jwks_raw=jwks_raw, now=now)
+    except InvalidGoogleTokenError:
+        # Could be a genuine bad token, or could be that Google rotated its
+        # signing keys and our cache is stale. Invalidate + retry once.
+        jwks_cache.invalidate()
+        jwks_raw = jwks_cache.get(now=now)
+        claims = _verify_against_key_set(id_token, jwks_raw=jwks_raw, now=now)
 
     iss = claims.get("iss")
     if iss not in _VALID_ISSUERS:
