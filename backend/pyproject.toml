@@ -56,6 +56,9 @@ known-first-party = ["app"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: tests that require a real database via Testcontainers; auto-skipped if Docker is unreachable",
+]
 
 [tool.mypy]
 python_version = "3.12"
