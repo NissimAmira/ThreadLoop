@@ -5,10 +5,11 @@ will rely on — expiry / revocation / rotation — plus a metadata sanity check
 that the table is registered with the schema RFC 0001 specifies.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import ForeignKey, LargeBinary
+from sqlalchemy import CheckConstraint, ForeignKey, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.models import RefreshToken
@@ -22,7 +23,7 @@ def _make_token(
 ) -> RefreshToken:
     issued = issued_at if issued_at is not None else datetime.now(UTC)
     token = RefreshToken(
-        user_id=__import__("uuid").uuid4(),
+        user_id=uuid.uuid4(),
         token_hash=b"\x00" * 32,
         issued_at=issued,
         expires_at=issued + expires_in,
@@ -53,7 +54,7 @@ def test_token_at_exact_expires_at_is_expired() -> None:
     """Boundary: `now == expires_at` counts as expired."""
     now = datetime.now(UTC)
     token = RefreshToken(
-        user_id=__import__("uuid").uuid4(),
+        user_id=uuid.uuid4(),
         token_hash=b"\x01" * 32,
         issued_at=now - timedelta(days=30),
         expires_at=now,
@@ -89,7 +90,7 @@ def test_rotation_pattern() -> None:
     The new token must be independently active even though it shares the
     same user_id with the revoked one.
     """
-    user_id = __import__("uuid").uuid4()
+    user_id = uuid.uuid4()
     now = datetime.now(UTC)
 
     old = RefreshToken(
@@ -118,7 +119,7 @@ def test_explicit_now_is_honored() -> None:
     """`is_expired` / `is_active` must accept an injected clock for determinism."""
     issued = datetime(2026, 1, 1, tzinfo=UTC)
     token = RefreshToken(
-        user_id=__import__("uuid").uuid4(),
+        user_id=uuid.uuid4(),
         token_hash=b"\x02" * 32,
         issued_at=issued,
         expires_at=issued + timedelta(days=30),
@@ -179,6 +180,17 @@ def test_token_hash_is_unique(refresh_tokens_table: object) -> None:
         for c in refresh_tokens_table.constraints  # type: ignore[attr-defined]
     }
     assert "uq_refresh_tokens_token_hash" in constraint_names
+
+
+def test_expires_after_issued_check_constraint(refresh_tokens_table: object) -> None:
+    """RFC 0001 doesn't mandate it, but we add a DB-level guard against
+    'born expired' rows caused by clock skew or swapped arguments at insert."""
+    checks = [
+        c
+        for c in refresh_tokens_table.constraints  # type: ignore[attr-defined]
+        if isinstance(c, CheckConstraint) and c.name == "ck_refresh_tokens_expires_after_issued"
+    ]
+    assert len(checks) == 1
 
 
 def test_expires_at_required_and_revoked_at_nullable(refresh_tokens_table: object) -> None:

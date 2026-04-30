@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, LargeBinary, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, LargeBinary, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,7 +20,13 @@ class RefreshToken(Base):
     """
 
     __tablename__ = "refresh_tokens"
-    __table_args__ = (UniqueConstraint("token_hash", name="uq_refresh_tokens_token_hash"),)
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_refresh_tokens_token_hash"),
+        CheckConstraint(
+            "expires_at > issued_at",
+            name="ck_refresh_tokens_expires_after_issued",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -46,7 +52,8 @@ class RefreshToken(Base):
         return self.revoked_at is not None
 
     def is_active(self, now: datetime | None = None) -> bool:
-        return not self.is_revoked() and not self.is_expired(now)
+        current = now if now is not None else datetime.now(UTC)
+        return not self.is_revoked() and not self.is_expired(current)
 
     def revoke(self, now: datetime | None = None) -> None:
         """Mark this token revoked. No-op if already revoked."""

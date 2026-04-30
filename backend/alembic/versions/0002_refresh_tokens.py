@@ -37,6 +37,10 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint("token_hash", name="uq_refresh_tokens_token_hash"),
+        sa.CheckConstraint(
+            "expires_at > issued_at",
+            name="ck_refresh_tokens_expires_after_issued",
+        ),
     )
     op.create_index("ix_refresh_tokens_user_id", "refresh_tokens", ["user_id"])
 
