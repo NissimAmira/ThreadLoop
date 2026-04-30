@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 Maintained automatically by [release-please](https://github.com/googleapis/release-please).
 
+## [1.3.0](https://github.com/NissimAmira/ThreadLoop/compare/v1.2.0...v1.3.0) (2026-04-30)
+
+
+### Features
+
+* task management + multi-agent dev cycle ([ee563b3](https://github.com/NissimAmira/ThreadLoop/commit/ee563b3b3e39bdaa3963cf5c6440b097619ae086))
+* task management + multi-agent dev cycle ([2b77add](https://github.com/NissimAmira/ThreadLoop/commit/2b77add6b304c01c5a7284c3086610722338f7ed))
+
 ## [1.2.0](https://github.com/NissimAmira/ThreadLoop/compare/v1.1.0...v1.2.0) (2026-04-29)
 
 
