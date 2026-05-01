@@ -43,6 +43,15 @@ Before decomposing, check:
 
 - The Epic has acceptance criteria. If absent or vague, reject:
   *"Bounce back to the `pm` agent — AC are missing or untestable."*
+- **At least one AC describes a user-visible behavior** — something a
+  human could click through, or a route a curl call could hit, or an
+  observable system state change. If every AC reads "internal helper
+  exists" / "schema added" / "type defined", reject: *"Bounce back to
+  the `pm` agent — these ACs are infrastructure outcomes, not user
+  outcomes. Without a user-visible AC, no end-to-end demo is possible
+  and the Epic can't be sliced vertically."* Pure-infrastructure Epics
+  (with no user-visible surface at all) should be reframed as enabling
+  slices for a downstream user-visible Epic, not stand-alone.
 - All Open Questions in the Epic are resolved. If not, list which are
   blockers and surface them to the human.
 - Dependencies are listed. If a dependency Epic is not yet shipped,
@@ -50,6 +59,37 @@ Before decomposing, check:
 
 If the Epic is not breakdown-ready, **do not produce sub-tasks**. List
 what needs to happen first.
+
+## Step 2.5 — Identify slice 1's demo
+
+Before you start writing sub-tasks, **answer this question explicitly**:
+
+> *"After slice 1 merges, what's the smallest concrete thing a human
+> can do or observe that they couldn't do before?"*
+
+Write the answer down (it goes verbatim into slice 1's "Demo unlocked"
+line in Step 7's output). One sentence. User-visible. Testable in a
+few minutes by a human, not just by automated tests.
+
+**Worked examples:**
+
+- Auth-sso slice 1: *"Click the Google button on /sign-in, complete
+  the Google flow, land on /me showing your name."*
+- Listings slice 1: *"Post a listing with a title and price; see it
+  appear on the home feed."*
+- Search slice 1: *"Type a query into the search box; see at least
+  one matching result."*
+
+**If you can't write the demo sentence in <30 seconds, the Epic is
+either too big or too abstract.** Stop and either (a) push back to
+`pm` for sharper AC, or (b) explicitly note that the first slice
+will be larger than usual and explain why. Don't proceed and hope
+the slice will reveal itself during decomposition — it won't, you'll
+end up with horizontal layers.
+
+This step can't be skipped. Every slice in Step 7 needs its "Demo
+unlocked" line, and slice 1's demo is the load-bearing one because
+it pins the smallest end-to-end test of the whole Epic's premise.
 
 ## Step 3 — Decompose into sub-tasks
 
