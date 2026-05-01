@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     apple_key_id: str = ""
     apple_private_key: str = ""
 
+    # Facebook Login credentials. Unlike Google and Apple, Facebook returns an
+    # access token (not an ID token) — the backend exchanges it for a profile
+    # via the Graph API. Sourced from Meta for Developers → My Apps → App
+    # Settings → Basic. We require both values when `auth_enabled=True` because
+    # the callback validates the incoming token via `/debug_token` before
+    # calling `/me`, which needs an app access token (`{APP_ID}|{APP_SECRET}`).
+    facebook_app_id: str = ""
+    facebook_app_secret: str = ""
+
     access_token_ttl_seconds: int = 15 * 60
     refresh_token_ttl_days: int = 30
     # Pending-link tokens are short-lived per RFC 0001 § Failure modes.
@@ -94,6 +103,15 @@ class Settings(BaseSettings):
                 missing.append("APPLE_KEY_ID")
             if not self.apple_private_key:
                 missing.append("APPLE_PRIVATE_KEY")
+            # Facebook: both APP_ID (used as the audience-equivalent during
+            # `/debug_token` validation) and APP_SECRET (used to construct the
+            # app access token, `{APP_ID}|{APP_SECRET}`) are required. Without
+            # the secret, every Facebook sign-in would silently 401 at
+            # /debug_token rather than telling the operator the real cause.
+            if not self.facebook_app_id:
+                missing.append("FACEBOOK_APP_ID")
+            if not self.facebook_app_secret:
+                missing.append("FACEBOOK_APP_SECRET")
             if missing:
                 raise ValueError(
                     "AUTH_ENABLED=true but the following auth secrets are unset: "

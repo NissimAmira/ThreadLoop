@@ -45,6 +45,23 @@ class AppleSsoCallbackInput(BaseModel):
     )
 
 
+class FacebookSsoCallbackInput(BaseModel):
+    """Body for `POST /api/auth/facebook/callback`.
+
+    Facebook is the odd one out: there is no ID token to verify against a
+    JWKS — the client hands us a user access token, and the backend resolves
+    it server-side via the Graph API (`/debug_token` to validate the token
+    was issued for our app, then `/me` to read the profile). See
+    `docs/auth.md` § Facebook specifics.
+    """
+
+    access_token: str = Field(
+        ...,
+        min_length=1,
+        description="Facebook user access token (resolved against Graph API server-side).",
+    )
+
+
 class UserOut(BaseModel):
     """OpenAPI `User`. Field names match the spec verbatim."""
 
