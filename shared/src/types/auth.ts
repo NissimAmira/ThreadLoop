@@ -12,6 +12,12 @@ export interface GoogleSsoCallbackInput {
 export interface AppleSsoCallbackInput {
   idToken: string;
   code: string;
+  /**
+   * Apple surfaces the user's name only on the first sign-in (and only when
+   * the app requested the `name` scope). Subsequent sign-ins omit it; the
+   * backend reuses the existing `users.display_name` in that case.
+   */
+  name?: string;
 }
 
 export interface FacebookSsoCallbackInput {

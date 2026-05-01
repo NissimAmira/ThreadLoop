@@ -22,6 +22,29 @@ class GoogleSsoCallbackInput(BaseModel):
     id_token: str = Field(..., min_length=1, description="Google-issued ID token.")
 
 
+class AppleSsoCallbackInput(BaseModel):
+    """Body for `POST /api/auth/apple/callback`.
+
+    Apple sends `name` only in the FIRST callback of a session (and even then
+    only when the app requested the `name` scope). Subsequent sign-ins omit
+    it entirely. We treat it as best-effort: if present, it seeds the new
+    user's `display_name`; if absent, the route falls back to email then to
+    a literal default. `code` is required by the OpenAPI contract for
+    upstream parity, but #15 itself doesn't exchange it — the ID token alone
+    establishes identity. (Documented in `docs/auth.md` § Apple specifics.)
+    """
+
+    id_token: str = Field(..., min_length=1, description="Apple-issued ID token.")
+    code: str = Field(..., min_length=1, description="Apple authorization code.")
+    name: str | None = Field(
+        default=None,
+        description=(
+            "User's name as Apple's JS SDK / native flow surfaces it on the "
+            "first sign-in only. Best-effort; absent on subsequent sign-ins."
+        ),
+    )
+
+
 class UserOut(BaseModel):
     """OpenAPI `User`. Field names match the spec verbatim."""
 

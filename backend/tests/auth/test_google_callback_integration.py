@@ -72,6 +72,12 @@ def auth_client(pg_url: str) -> Iterator[TestClient]:
         jwt_signing_key="test-jwt-signing-key",
         refresh_token_hmac_key="test-hmac-key",
         google_client_id=GOOGLE_AUD,
+        # Apple secrets are required by the validator when auth_enabled=True
+        # (added in #15) but the Google branch never reads them.
+        apple_client_id="test-apple-client-id",
+        apple_team_id="TESTTEAM01",
+        apple_key_id="TESTKID0001",
+        apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
         refresh_cookie_secure=False,  # TestClient over http://testserver
     )
 
@@ -238,16 +244,16 @@ def test_jwks_unreachable_returns_503(
 
 
 def test_not_yet_implemented_provider_returns_404(auth_client: TestClient) -> None:
-    """`apple` and `facebook` are valid provider names per the OpenAPI enum
-    but their callbacks don't ship in this PR. The dispatcher accepts the
-    body as a raw dict and matches the provider branch BEFORE validating any
-    body shape, so the response is 404 with `code: provider_not_implemented`
-    regardless of what the body looks like. Once #15 / #16 land they replace
-    the 404 branch with real handlers — no OpenAPI change needed since 404
-    is already in the spec for this path."""
+    """`facebook` is a valid provider name per the OpenAPI enum but its
+    callback doesn't ship until #16. The dispatcher accepts the body as a
+    raw dict and matches the provider branch BEFORE validating any body
+    shape, so the response is 404 with `code: provider_not_implemented`
+    regardless of what the body looks like. Once #16 lands it replaces the
+    404 branch with a real handler — no OpenAPI change needed since 404 is
+    already in the spec for this path. (Apple's branch shipped in #15.)"""
     resp = auth_client.post(
-        "/api/auth/apple/callback",
-        json={"id_token": "anything", "code": "ignored"},
+        "/api/auth/facebook/callback",
+        json={"access_token": "anything"},
     )
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "provider_not_implemented"
@@ -260,6 +266,7 @@ def test_auth_disabled_returns_404(
     """RFC 0001 § Rollout plan step 1: every `/api/auth/*` route returns 404
     when `AUTH_ENABLED=false`. Override the test settings to flip the flag
     off and confirm the route disappears even with an otherwise-valid body."""
+    apple_pem = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"
     test_settings = Settings(
         auth_enabled=False,
         database_url="postgresql+psycopg://x:x@nope/x",
@@ -267,6 +274,10 @@ def test_auth_disabled_returns_404(
         refresh_token_hmac_key="test-hmac-key",
         google_client_id=GOOGLE_AUD,
         refresh_cookie_secure=False,
+        apple_client_id="test-apple-client-id",
+        apple_team_id="TESTTEAM01",
+        apple_key_id="TESTKID0001",
+        apple_private_key=apple_pem,
     )
     app.dependency_overrides[get_settings] = lambda: test_settings
     try:
@@ -284,6 +295,10 @@ def test_auth_disabled_returns_404(
             refresh_token_hmac_key="test-hmac-key",
             google_client_id=GOOGLE_AUD,
             refresh_cookie_secure=False,
+            apple_client_id="test-apple-client-id",
+            apple_team_id="TESTTEAM01",
+            apple_key_id="TESTKID0001",
+            apple_private_key=apple_pem,
         )
     assert resp.status_code == 404
 

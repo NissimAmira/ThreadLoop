@@ -66,11 +66,46 @@ def test_auth_enabled_lists_all_missing_secrets() -> None:
             google_client_id="",
             jwt_signing_key="",
             refresh_token_hmac_key="",
+            apple_client_id="",
+            apple_team_id="",
+            apple_key_id="",
+            apple_private_key="",
         )
     msg = str(exc_info.value)
     assert "GOOGLE_CLIENT_ID" in msg
     assert "JWT_SIGNING_KEY" in msg
     assert "REFRESH_TOKEN_HMAC_KEY" in msg
+    assert "APPLE_CLIENT_ID" in msg
+    assert "APPLE_TEAM_ID" in msg
+    assert "APPLE_KEY_ID" in msg
+    assert "APPLE_PRIVATE_KEY" in msg
+
+
+@pytest.mark.parametrize(
+    "missing_field, env_var",
+    [
+        ("apple_client_id", "APPLE_CLIENT_ID"),
+        ("apple_team_id", "APPLE_TEAM_ID"),
+        ("apple_key_id", "APPLE_KEY_ID"),
+        ("apple_private_key", "APPLE_PRIVATE_KEY"),
+    ],
+)
+def test_auth_enabled_with_missing_apple_secret_rejected(missing_field: str, env_var: str) -> None:
+    """Same semantics as the Google guard: a missing Apple secret fails loudly
+    at `Settings()` construction rather than at request time."""
+    kwargs: dict[str, object] = dict(
+        auth_enabled=True,
+        google_client_id="cid",
+        jwt_signing_key="key",
+        refresh_token_hmac_key="key",
+        apple_client_id="apple-cid",
+        apple_team_id="TEAM000001",
+        apple_key_id="KID0000001",
+        apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+    )
+    kwargs[missing_field] = ""
+    with pytest.raises(ValidationError, match=env_var):
+        Settings(**kwargs)
 
 
 def test_auth_enabled_with_all_secrets_set_constructs() -> None:
@@ -79,5 +114,9 @@ def test_auth_enabled_with_all_secrets_set_constructs() -> None:
         google_client_id="cid",
         jwt_signing_key="key",
         refresh_token_hmac_key="key",
+        apple_client_id="apple-cid",
+        apple_team_id="TEAM000001",
+        apple_key_id="KID0000001",
+        apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
     )
     assert settings.auth_enabled is True
