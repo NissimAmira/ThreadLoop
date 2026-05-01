@@ -28,6 +28,7 @@ from app import db as db_module
 from app.config import Settings, get_settings
 from app.db import Base, get_db
 from app.main import app
+from tests.auth._test_settings import make_test_settings
 
 pytestmark = pytest.mark.integration
 
@@ -66,22 +67,13 @@ def auth_client(pg_url: str) -> Iterator[TestClient]:
         finally:
             session.close()
 
-    test_settings = Settings(
-        auth_enabled=True,
+    # Apple + Facebook secrets are required by the validator when
+    # `auth_enabled=True` (added in #15 and #16) but the Google branch never
+    # reads them; the factory provides safe defaults so this call only
+    # specifies the Google-relevant overrides.
+    test_settings = make_test_settings(
         database_url=pg_url,
-        jwt_signing_key="test-jwt-signing-key",
-        refresh_token_hmac_key="test-hmac-key",
         google_client_id=GOOGLE_AUD,
-        # Apple secrets are required by the validator when auth_enabled=True
-        # (added in #15) but the Google branch never reads them.
-        apple_client_id="test-apple-client-id",
-        apple_team_id="TESTTEAM01",
-        apple_key_id="TESTKID0001",
-        apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
-        # Facebook secrets are required by the validator when auth_enabled=True
-        # (added in #16); the Google branch never reads them.
-        facebook_app_id="test-facebook-app-id",
-        facebook_app_secret="test-facebook-app-secret",
         refresh_cookie_secure=False,  # TestClient over http://testserver
     )
 
@@ -254,20 +246,11 @@ def test_auth_disabled_returns_404(
     """RFC 0001 § Rollout plan step 1: every `/api/auth/*` route returns 404
     when `AUTH_ENABLED=false`. Override the test settings to flip the flag
     off and confirm the route disappears even with an otherwise-valid body."""
-    apple_pem = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"
-    test_settings = Settings(
+    test_settings = make_test_settings(
         auth_enabled=False,
         database_url="postgresql+psycopg://x:x@nope/x",
-        jwt_signing_key="test-jwt-signing-key",
-        refresh_token_hmac_key="test-hmac-key",
         google_client_id=GOOGLE_AUD,
         refresh_cookie_secure=False,
-        apple_client_id="test-apple-client-id",
-        apple_team_id="TESTTEAM01",
-        apple_key_id="TESTKID0001",
-        apple_private_key=apple_pem,
-        facebook_app_id="test-facebook-app-id",
-        facebook_app_secret="test-facebook-app-secret",
     )
     app.dependency_overrides[get_settings] = lambda: test_settings
     try:
@@ -278,19 +261,10 @@ def test_auth_disabled_returns_404(
     finally:
         # Restore the auth-enabled override so subsequent tests in this
         # session see the auth_client default.
-        app.dependency_overrides[get_settings] = lambda: Settings(
-            auth_enabled=True,
+        app.dependency_overrides[get_settings] = lambda: make_test_settings(
             database_url=test_settings.database_url,
-            jwt_signing_key="test-jwt-signing-key",
-            refresh_token_hmac_key="test-hmac-key",
             google_client_id=GOOGLE_AUD,
             refresh_cookie_secure=False,
-            apple_client_id="test-apple-client-id",
-            apple_team_id="TESTTEAM01",
-            apple_key_id="TESTKID0001",
-            apple_private_key=apple_pem,
-            facebook_app_id="test-facebook-app-id",
-            facebook_app_secret="test-facebook-app-secret",
         )
     assert resp.status_code == 404
 

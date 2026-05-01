@@ -36,10 +36,11 @@ from app.auth.facebook import (
     GraphApiUnavailableError,
     InvalidFacebookTokenError,
 )
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.db import Base, get_db
 from app.main import app
 from app.routers import auth as auth_router
+from tests.auth._test_settings import make_test_settings
 
 pytestmark = pytest.mark.integration
 
@@ -79,16 +80,8 @@ def auth_client(pg_url: str) -> Iterator[TestClient]:
         finally:
             session.close()
 
-    test_settings = Settings(
-        auth_enabled=True,
+    test_settings = make_test_settings(
         database_url=pg_url,
-        jwt_signing_key="test-jwt-signing-key",
-        refresh_token_hmac_key="test-hmac-key",
-        google_client_id="test-google-client-id.apps.googleusercontent.com",
-        apple_client_id="test-apple-client-id",
-        apple_team_id="TESTTEAM01",
-        apple_key_id="TESTKID0001",
-        apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
         facebook_app_id=FB_APP_ID,
         facebook_app_secret=FB_APP_SECRET,
         refresh_cookie_secure=False,

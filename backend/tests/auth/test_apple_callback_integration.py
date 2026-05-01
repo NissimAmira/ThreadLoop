@@ -36,6 +36,7 @@ from app.auth.apple import APPLE_JWKS_URL, _JwksCache
 from app.config import Settings, get_settings
 from app.db import Base, get_db
 from app.main import app
+from tests.auth._test_settings import make_test_settings
 
 pytestmark = pytest.mark.integration
 
@@ -191,20 +192,16 @@ def auth_client(pg_url: str, apple_p8_pem: str) -> Iterator[TestClient]:
         finally:
             session.close()
 
-    test_settings = Settings(
-        auth_enabled=True,
+    # Apple-specific overrides: the real ES256 PEM from `apple_p8_pem` (the
+    # factory's PEM default is a non-cryptographic placeholder, sufficient for
+    # the Google / Facebook branches but not for actually signing
+    # `client_secret`). Facebook secrets come from the factory.
+    test_settings = make_test_settings(
         database_url=pg_url,
-        jwt_signing_key="test-jwt-signing-key",
-        refresh_token_hmac_key="test-hmac-key",
-        google_client_id="test-google-client-id.apps.googleusercontent.com",
         apple_client_id=APPLE_AUD,
         apple_team_id=APPLE_TEAM,
         apple_key_id=APPLE_KID,
         apple_private_key=apple_p8_pem,
-        # Facebook secrets are required by the validator when auth_enabled=True
-        # (added in #16); the Apple branch never reads them.
-        facebook_app_id="test-facebook-app-id",
-        facebook_app_secret="test-facebook-app-secret",
         refresh_cookie_secure=False,
     )
 
