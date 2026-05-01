@@ -23,6 +23,7 @@ Failure semantics map to the OpenAPI contract:
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from dataclasses import dataclass
@@ -230,10 +231,32 @@ def _coerce_bool(value: Any) -> bool:
 
 @dataclass(frozen=True)
 class _CachedClientSecret:
-    """In-process cache entry for a signed Apple `client_secret` JWT."""
+    """In-process cache entry for a signed Apple `client_secret` JWT.
+
+    Stores the inputs the JWT was signed with so a later call can detect a
+    rotation (different team_id / client_id / key_id / `.p8` contents) and
+    resign rather than serve the stale-but-still-young cached JWT. The PEM
+    contents are kept as a SHA-256 fingerprint, never the plaintext — there's
+    no reason to hold the secret-shaped value any longer than the signing
+    call needs it.
+    """
 
     encoded: str
     issued_at: datetime
+    team_id: str
+    client_id: str
+    key_id: str
+    private_key_fingerprint: str
+
+
+def _fingerprint_pem(private_key_pem: str) -> str:
+    """SHA-256 fingerprint of the PEM contents.
+
+    Used as a cache-key component in `_ClientSecretCache` — comparing
+    fingerprints catches a rotated `.p8` without ever storing the PEM
+    plaintext on the cache entry.
+    """
+    return hashlib.sha256(private_key_pem.encode("utf-8")).hexdigest()
 
 
 class _ClientSecretCache:
@@ -243,8 +266,32 @@ class _ClientSecretCache:
     JWT's own 1-hour `exp`. Kept thread-safe so concurrent callbacks during
     a refresh don't double-sign.
 
-    Manual rotation of the underlying `.p8` key requires either bouncing the
-    process or calling `invalidate()` (e.g. from a future rotation job).
+    Cache-key tuple: ``(team_id, client_id, key_id, hash(private_key_pem))``.
+    All four components matter:
+
+    - ``team_id`` is the Apple Developer team identifier; rotating it
+      (e.g. moving the app between teams) invalidates every previously-signed
+      JWT because Apple's token endpoint binds `iss` to the configured team.
+    - ``client_id`` is the Service ID; signs the `sub` claim. A different
+      Service ID legitimately needs a freshly-signed JWT.
+    - ``key_id`` is the `kid` header; rotating the `.p8` typically gets a new
+      `kid`, and Apple matches the JWT signature against the `kid` declared
+      in the header.
+    - ``hash(private_key_pem)`` is a SHA-256 fingerprint of the `.p8`
+      contents. Even if someone somehow rotated the PEM without rotating the
+      `kid`, the cached JWT would have been signed with the old key and
+      Apple would reject it. Catching the swap here resigns proactively.
+
+    Without this, a cached JWT signed with the previous key tuple would keep
+    being served for up to `_CLIENT_SECRET_REFRESH_AFTER_SECONDS` after a
+    rotation — Apple would reject every callback's `client_secret` parameter
+    until the cache aged out. Bug carved out from PR #33's CR review and
+    fixed alongside #17 (the first place outside the apple callback that
+    exercises the cache surface).
+
+    Manual rotation of the underlying `.p8` key (or any of the other three
+    components) is now picked up automatically on the next call. Bouncing
+    the process is no longer required for correctness — just convenience.
     """
 
     def __init__(self) -> None:
@@ -260,14 +307,29 @@ class _ClientSecretCache:
         private_key_pem: str,
         now: datetime | None = None,
     ) -> str:
-        """Return a valid signed `client_secret` JWT, signing a fresh one if
-        the cache is empty or the previous JWT is too close to expiry."""
+        """Return a valid signed `client_secret` JWT, signing a fresh one if:
+
+        - the cache is empty,
+        - the previous JWT is too close to expiry, **or**
+        - any of `(team_id, client_id, key_id, hash(private_key_pem))` differ
+          from the cached entry's signing inputs.
+
+        See class docstring for why each component matters.
+        """
         current = now if now is not None else datetime.now(UTC)
+        fingerprint = _fingerprint_pem(private_key_pem)
         with self._lock:
-            if self._entry is not None:
-                age = (current - self._entry.issued_at).total_seconds()
-                if age < _CLIENT_SECRET_REFRESH_AFTER_SECONDS:
-                    return self._entry.encoded
+            entry = self._entry
+            if entry is not None:
+                age = (current - entry.issued_at).total_seconds()
+                inputs_unchanged = (
+                    entry.team_id == team_id
+                    and entry.client_id == client_id
+                    and entry.key_id == key_id
+                    and entry.private_key_fingerprint == fingerprint
+                )
+                if inputs_unchanged and age < _CLIENT_SECRET_REFRESH_AFTER_SECONDS:
+                    return entry.encoded
             encoded = _sign_client_secret_jwt(
                 team_id=team_id,
                 client_id=client_id,
@@ -275,7 +337,14 @@ class _ClientSecretCache:
                 private_key_pem=private_key_pem,
                 now=current,
             )
-            self._entry = _CachedClientSecret(encoded=encoded, issued_at=current)
+            self._entry = _CachedClientSecret(
+                encoded=encoded,
+                issued_at=current,
+                team_id=team_id,
+                client_id=client_id,
+                key_id=key_id,
+                private_key_fingerprint=fingerprint,
+            )
             return encoded
 
     def invalidate(self) -> None:
