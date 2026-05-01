@@ -78,6 +78,10 @@ def auth_client(pg_url: str) -> Iterator[TestClient]:
         apple_team_id="TESTTEAM01",
         apple_key_id="TESTKID0001",
         apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        # Facebook secrets are required by the validator when auth_enabled=True
+        # (added in #16); the Google branch never reads them.
+        facebook_app_id="test-facebook-app-id",
+        facebook_app_secret="test-facebook-app-secret",
         refresh_cookie_secure=False,  # TestClient over http://testserver
     )
 
@@ -243,22 +247,6 @@ def test_jwks_unreachable_returns_503(
     assert resp.json()["detail"]["code"] == "jwks_unavailable"
 
 
-def test_not_yet_implemented_provider_returns_404(auth_client: TestClient) -> None:
-    """`facebook` is a valid provider name per the OpenAPI enum but its
-    callback doesn't ship until #16. The dispatcher accepts the body as a
-    raw dict and matches the provider branch BEFORE validating any body
-    shape, so the response is 404 with `code: provider_not_implemented`
-    regardless of what the body looks like. Once #16 lands it replaces the
-    404 branch with a real handler — no OpenAPI change needed since 404 is
-    already in the spec for this path. (Apple's branch shipped in #15.)"""
-    resp = auth_client.post(
-        "/api/auth/facebook/callback",
-        json={"access_token": "anything"},
-    )
-    assert resp.status_code == 404
-    assert resp.json()["detail"]["code"] == "provider_not_implemented"
-
-
 def test_auth_disabled_returns_404(
     auth_client: TestClient,
     google_id_token: Callable[..., str],
@@ -278,6 +266,8 @@ def test_auth_disabled_returns_404(
         apple_team_id="TESTTEAM01",
         apple_key_id="TESTKID0001",
         apple_private_key=apple_pem,
+        facebook_app_id="test-facebook-app-id",
+        facebook_app_secret="test-facebook-app-secret",
     )
     app.dependency_overrides[get_settings] = lambda: test_settings
     try:
@@ -299,6 +289,8 @@ def test_auth_disabled_returns_404(
             apple_team_id="TESTTEAM01",
             apple_key_id="TESTKID0001",
             apple_private_key=apple_pem,
+            facebook_app_id="test-facebook-app-id",
+            facebook_app_secret="test-facebook-app-secret",
         )
     assert resp.status_code == 404
 

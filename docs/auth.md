@@ -27,10 +27,11 @@ deployed binary will look like once the flag is flipped.
 
 When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless all of
 `GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, `REFRESH_TOKEN_HMAC_KEY`,
-`APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY`
-are set non-empty. This catches the common misconfiguration where an unset
-provider secret would silently make every sign-in look like "your token is
-invalid" (401) when the real fault is server config.
+`APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`,
+`FACEBOOK_APP_ID`, and `FACEBOOK_APP_SECRET` are set non-empty. This catches
+the common misconfiguration where an unset provider secret would silently
+make every sign-in look like "your token is invalid" (401) when the real
+fault is server config.
 
 Rollout sequence (RFC 0001):
 1. Implementation lands flag-off.
@@ -260,6 +261,68 @@ and merges identities.
   than silently accepting any well-formed token; the `client_secret`
   signing helper raises rather than producing an unsigned JWT.
 
+### Facebook specifics
+
+Facebook is the odd one out: the OAuth flow surfaces a **user access token**,
+not an OIDC ID token. There is no JWT signature to verify against a JWKS;
+the security guarantee comes from two server-side calls to the Graph API.
+
+- **Two Graph API calls per sign-in.**
+  1. `GET https://graph.facebook.com/debug_token` with
+     `input_token=<user_access_token>` and
+     `access_token=<app_access_token>`. Validates the user token is current
+     (not expired, not revoked) AND that it was issued for **our** Facebook
+     app (`data.app_id == FACEBOOK_APP_ID`).
+  2. `GET https://graph.facebook.com/me?fields=id,name,email,picture` with
+     `Authorization: Bearer <user_access_token>`. Returns the stable
+     `(provider='facebook', provider_user_id=id)` identity plus optional
+     name, email, and avatar URL.
+- **Why `/debug_token` first.** `/me` alone is user-scoped — it would happily
+  return a user profile to whoever holds the access token, including a
+  malicious Facebook app that obtained the token via a separate sign-in
+  flow. `/debug_token`'s `app_id` check is the only Graph-side mechanism
+  that asserts "this token was issued for THIS app". Cost is one extra
+  HTTP call inside the same `httpx.Client`. Decision committed in #16.
+- **App access token construction.** Per Meta's docs, the app access token
+  required by `/debug_token` is the literal string
+  `"{FACEBOOK_APP_ID}|{FACEBOOK_APP_SECRET}"` — no Graph round-trip needed
+  to obtain it. We rebuild it per verification rather than caching, so the
+  process never holds a long-lived secret-shaped value beyond the request.
+- **No JWT, no JWKS, no key cache.** The Graph calls are the trust anchor.
+  This means there is no rotation handler analogous to the Google / Apple
+  invalidate-and-retry-once path — Facebook key rotation is invisible to us.
+- **Email permission is optional.** The `email` permission is a separately
+  granted scope; users can decline it in Facebook's consent dialog, in which
+  case `/me` omits the `email` field. The verifier surfaces `email=None`
+  and `email_verified=False`, the route's display-name fallback chain is
+  `name → email → "ThreadLoop user"`, and the cross-provider collision
+  check trivially can't fire (no email to match).
+- **`email_verified` is always `False`.** The Graph API does **not** expose
+  a verified-email flag on `/me`. Treating any returned email as unverified
+  is the deliberate choice — silently auto-merging on an unverified email
+  would be the same account-takeover vector the Google and Apple branches
+  already guard against. Result: the cross-provider collision detection
+  (which requires verified emails on both sides) **never fires for
+  Facebook sign-ins**. The conditional is kept verbatim in the route layer
+  so a future change to Facebook's Graph response (e.g. adding a `verified`
+  flag) plugs in cleanly. Account merging across `Facebook ↔ Google/Apple`
+  is therefore exclusively user-initiated through the linking flow shipping
+  in #18.
+- **No relay-equivalent.** Apple's `is_private_email` bypass exists because
+  Apple's own ID token tells us the email is a relay address; Facebook has
+  no analogous signal because it never claims verification in the first
+  place. The collision check is the standard one (and never fires per
+  above).
+- **Failure mapping.** `/debug_token` 5xx or transport-level
+  unreachability → `503 graph_api_unavailable`. `/debug_token` 4xx, token
+  reported as invalid, token issued for a different app, malformed Graph
+  response, or `/me` 401 → `401 invalid_token`. The route never echoes the
+  upstream verifier message — it can carry token contents.
+- **Unconfigured Facebook secrets.** As with Google and Apple, the verifier
+  raises rather than silently accepting any token; `Settings()` refuses to
+  construct with `auth_enabled=True` and an empty `FACEBOOK_APP_ID` or
+  `FACEBOOK_APP_SECRET`.
+
 ## Buyer/seller dual role
 
 One `users` row per person. Two capability flags govern actions:
@@ -293,10 +356,11 @@ re-authenticating.
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
 - Provider SDK integration (web + mobile)
-- `/api/auth/facebook/callback` (#16)
 - `/api/auth/refresh` + `/api/auth/logout` + `/api/me` + session middleware (#17)
 - Account-linking *resolution* — `POST /api/auth/link` (#18). Detection is
-  already wired into the Google and Apple callbacks.
+  already wired into the Google and Apple callbacks; Facebook never trips
+  the link path because Graph API doesn't expose `email_verified` (see
+  Facebook specifics).
 - `require_buyer` / `require_seller` dependencies
 - Scheduled `client_secret` JWT rotation job (RFC 0001 § Risks).
 
@@ -305,14 +369,16 @@ Already landed:
 - `refresh_tokens` table + `RefreshToken` model with rotation/expiry/revocation
   helpers (#22, PR #29).
 - `POST /api/auth/google/callback`, the session helpers
-  (`backend/app/auth/session.py`) #15/#16/#17 reuse, the Google JWKS
+  (`backend/app/auth/session.py`) every callback reuses, the Google JWKS
   verifier with in-process caching, the HMAC-SHA-256 refresh-token hash, and
   cross-provider link-required detection (#14, PR #31).
 - `POST /api/auth/apple/callback`, the Apple JWKS verifier with the same
   invalidate-and-retry-once rotation handler, the ES256 `client_secret`
   JWT generator with 50-minute in-process cache, the Hide-My-Email relay
   bypass for cross-provider collision detection, and the name-only-on-
-  first-signin display-name handling (#15, this PR).
-
-Until the remaining callback route ships, `users` rows for Facebook can
-still be inserted via Alembic seed data for local development.
+  first-signin display-name handling (#15, PR #33).
+- `POST /api/auth/facebook/callback`, the Graph-API-backed verifier with
+  `/debug_token` validation against `FACEBOOK_APP_ID` followed by `/me`
+  for the profile, and the design choice to treat every Facebook email as
+  unverified (so the cross-provider collision check never fires for
+  Facebook) (#16, this PR).

@@ -201,6 +201,10 @@ def auth_client(pg_url: str, apple_p8_pem: str) -> Iterator[TestClient]:
         apple_team_id=APPLE_TEAM,
         apple_key_id=APPLE_KID,
         apple_private_key=apple_p8_pem,
+        # Facebook secrets are required by the validator when auth_enabled=True
+        # (added in #16); the Apple branch never reads them.
+        facebook_app_id="test-facebook-app-id",
+        facebook_app_secret="test-facebook-app-secret",
         refresh_cookie_secure=False,
     )
 

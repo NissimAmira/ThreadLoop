@@ -70,6 +70,8 @@ def test_auth_enabled_lists_all_missing_secrets() -> None:
             apple_team_id="",
             apple_key_id="",
             apple_private_key="",
+            facebook_app_id="",
+            facebook_app_secret="",
         )
     msg = str(exc_info.value)
     assert "GOOGLE_CLIENT_ID" in msg
@@ -79,6 +81,8 @@ def test_auth_enabled_lists_all_missing_secrets() -> None:
     assert "APPLE_TEAM_ID" in msg
     assert "APPLE_KEY_ID" in msg
     assert "APPLE_PRIVATE_KEY" in msg
+    assert "FACEBOOK_APP_ID" in msg
+    assert "FACEBOOK_APP_SECRET" in msg
 
 
 @pytest.mark.parametrize(
@@ -102,6 +106,39 @@ def test_auth_enabled_with_missing_apple_secret_rejected(missing_field: str, env
         apple_team_id="TEAM000001",
         apple_key_id="KID0000001",
         apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        facebook_app_id="fb-app-id",
+        facebook_app_secret="fb-app-secret",
+    )
+    kwargs[missing_field] = ""
+    with pytest.raises(ValidationError, match=env_var):
+        Settings(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "missing_field, env_var",
+    [
+        ("facebook_app_id", "FACEBOOK_APP_ID"),
+        ("facebook_app_secret", "FACEBOOK_APP_SECRET"),
+    ],
+)
+def test_auth_enabled_with_missing_facebook_secret_rejected(
+    missing_field: str, env_var: str
+) -> None:
+    """Same loud-fail semantics for the Facebook callback's required app
+    credentials: without the APP_ID we can't validate /debug_token responses,
+    and without the APP_SECRET we can't construct the app access token at all.
+    """
+    kwargs: dict[str, object] = dict(
+        auth_enabled=True,
+        google_client_id="cid",
+        jwt_signing_key="key",
+        refresh_token_hmac_key="key",
+        apple_client_id="apple-cid",
+        apple_team_id="TEAM000001",
+        apple_key_id="KID0000001",
+        apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        facebook_app_id="fb-app-id",
+        facebook_app_secret="fb-app-secret",
     )
     kwargs[missing_field] = ""
     with pytest.raises(ValidationError, match=env_var):
@@ -118,5 +155,7 @@ def test_auth_enabled_with_all_secrets_set_constructs() -> None:
         apple_team_id="TEAM000001",
         apple_key_id="KID0000001",
         apple_private_key="-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        facebook_app_id="fb-app-id",
+        facebook_app_secret="fb-app-secret",
     )
     assert settings.auth_enabled is True

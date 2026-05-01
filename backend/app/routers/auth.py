@@ -1,18 +1,18 @@
 """Auth callback dispatcher.
 
 Wire format follows `POST /api/auth/{provider}/callback` in
-`shared/openapi.yaml`. The `google` branch shipped in #14 and the `apple`
-branch shipped in #15 (this PR); `facebook` (#16) plugs into the same
-dispatcher.
+`shared/openapi.yaml`. The `google` branch shipped in #14, the `apple` branch
+shipped in #15, and the `facebook` branch shipped in #16 (this PR). All three
+plug into the same dispatcher.
 
 The whole router is gated behind `Settings.auth_enabled` per RFC 0001 §
 Rollout plan step 1: every route returns 404 while the flag is off so we can
 land the implementation environment-by-environment.
 
 The 'find-or-create user' + 'detect cross-provider email collision' logic
-lives here; everything cryptographic is in `app.auth.google` /
-`app.auth.apple` (token verify), `app.auth.session` (mint + cookie), and
-`app.auth.link` (pending-link token).
+lives here; everything cryptographic / network-bound is in `app.auth.google`
+/ `app.auth.apple` / `app.auth.facebook` (token verify), `app.auth.session`
+(mint + cookie), and `app.auth.link` (pending-link token).
 """
 
 from __future__ import annotations
@@ -30,6 +30,11 @@ from app.auth.apple import (
     verify_apple_id_token,
 )
 from app.auth.apple import JwksUnavailableError as AppleJwksUnavailableError
+from app.auth.facebook import (
+    GraphApiUnavailableError,
+    InvalidFacebookTokenError,
+    verify_facebook_access_token,
+)
 from app.auth.google import (
     InvalidGoogleTokenError,
     JwksUnavailableError,
@@ -39,6 +44,7 @@ from app.auth.link import issue_link_token
 from app.auth.schemas import (
     AppleSsoCallbackInput,
     AuthProvider,
+    FacebookSsoCallbackInput,
     GoogleSsoCallbackInput,
     Session,
     UserOut,
@@ -132,13 +138,17 @@ def sso_callback(
             ) from None
         return _handle_apple_callback(body=apple_body, response=response, db=db, settings=settings)
 
-    # #16 (facebook) will replace this with a real impl. 404 with a stable
-    # `code` is the right semantic per the OpenAPI contract
-    # (200/400/401/404/503 for this path) — 501 would be drift.
-    raise _http_error(
-        "provider_not_implemented",
-        f"Provider {provider!r} is not yet implemented.",
-        status.HTTP_404_NOT_FOUND,
+    # provider == "facebook" — the only remaining branch given the Literal
+    # constraint on `provider` and the membership check above.
+    try:
+        facebook_body = FacebookSsoCallbackInput.model_validate(body)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from None
+    return _handle_facebook_callback(
+        body=facebook_body, response=response, db=db, settings=settings
     )
 
 
@@ -199,6 +209,112 @@ def _handle_google_callback(
     if existing is None:
         user = User(
             provider="google",
+            provider_user_id=identity.sub,
+            email=identity.email,
+            email_verified=identity.email_verified,
+            display_name=identity.name or (identity.email or "ThreadLoop user"),
+            avatar_url=identity.picture,
+        )
+        db.add(user)
+        db.flush()
+    else:
+        user = existing
+
+    issued = issue_session(user, db=db, response=response, settings=settings)
+    db.commit()
+    db.refresh(user)
+
+    return Session(
+        link_required=False,
+        access_token=issued.access_token,
+        expires_at=issued.access_token_expires_at,
+        user=UserOut.model_validate(user),
+    )
+
+
+def _handle_facebook_callback(
+    *,
+    body: FacebookSsoCallbackInput,
+    response: Response,
+    db: DbSession,
+    settings: Settings,
+) -> Session:
+    """Facebook SSO callback.
+
+    Differs from Google / Apple in two important ways:
+
+    1. **No JWT to verify.** The client hands us an opaque user access token;
+       we resolve identity via two Graph API calls (`/debug_token` then
+       `/me`). The Graph API is the trust anchor — there is no JWKS, no key
+       rotation, no in-process cache. See `app.auth.facebook` for the flow.
+
+    2. **No verified email.** Facebook does not expose `email_verified` in
+       the Graph response, so the verifier hard-codes `email_verified=False`
+       on every Facebook identity. The cross-provider collision check below
+       therefore never fires for Facebook — matching against an unverified
+       email would be the same account-takeover vector the Google and Apple
+       branches guard against. This is intentional, not an oversight; the
+       absence of a `link_required` path on Facebook sign-ins is documented
+       in `docs/auth.md` § Facebook specifics.
+    """
+    try:
+        identity = verify_facebook_access_token(
+            body.access_token,
+            app_id=settings.facebook_app_id,
+            app_secret=settings.facebook_app_secret,
+        )
+    except GraphApiUnavailableError:
+        logger.warning("Facebook Graph API unavailable; returning 503")
+        raise _http_error(
+            "graph_api_unavailable",
+            "Facebook Graph API is unreachable; please retry.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from None
+    except InvalidFacebookTokenError as exc:
+        # Don't echo the upstream message — it can carry token contents.
+        logger.info("Facebook access token rejected: %s", exc)
+        raise _http_error(
+            "invalid_token",
+            "Facebook access token is invalid or expired.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from None
+
+    existing = db.execute(
+        select(User).where(User.provider == "facebook", User.provider_user_id == identity.sub)
+    ).scalar_one_or_none()
+
+    # Cross-provider collision check. Structurally identical to the Google
+    # branch, but `identity.email_verified` is hard-coded False by the
+    # verifier (see module docstring), so this branch never fires in
+    # practice. The conditional is kept verbatim rather than dead-coded out
+    # so a future change to Facebook's Graph response (e.g. them adding
+    # `verified` to /me) plugs in cleanly without requiring the route layer
+    # to also be revised.
+    if existing is None and identity.email and identity.email_verified:
+        collision = db.execute(
+            select(User).where(
+                User.email == identity.email,
+                User.email_verified.is_(True),
+                User.provider != "facebook",
+            )
+        ).scalar_one_or_none()
+        if collision is not None:
+            link_token, _ = issue_link_token(
+                existing_user_id=collision.id,
+                new_provider="facebook",
+                new_provider_user_id=identity.sub,
+                new_email=identity.email,
+                settings=settings,
+            )
+            return Session(
+                link_required=True,
+                link_provider=cast(AuthProvider, collision.provider),
+                link_token=link_token,
+            )
+
+    if existing is None:
+        user = User(
+            provider="facebook",
             provider_user_id=identity.sub,
             email=identity.email,
             email_verified=identity.email_verified,
