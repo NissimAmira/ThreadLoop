@@ -13,7 +13,9 @@ Flow:
    Validates that the token is current (not expired, not revoked) AND that
    it was issued for OUR app (`data.app_id == FACEBOOK_APP_ID`). The app
    access token is the literal string `"{APP_ID}|{APP_SECRET}"` per Meta's
-   docs — no Graph round-trip needed to obtain it.
+   docs — no Graph round-trip needed to obtain it. We also extract
+   `data.user_id` and `data.expires_at` for the cross-check / belt-and-braces
+   expiry guard described below.
 
 2. **`/me?fields=id,name,email,picture`** — fetch the user profile, with
    `Authorization: Bearer <user_access_token>`. Returns the stable
@@ -25,7 +27,19 @@ access token and replay it against ours; `/me` is user-scoped (not
 app-scoped) per Graph semantics, so it would happily return the user's
 profile to whoever holds the token. `/debug_token` closes that gap by
 asserting the token's `app_id` matches FACEBOOK_APP_ID. Cost is one extra
-HTTP call inside the same `httpx.AsyncClient` session.
+HTTP call inside the same `httpx.Client` session.
+
+Belt-and-braces checks layered on top of the `app_id` guarantee:
+
+- **Explicit `expires_at` check.** Graph normally flips `is_valid=false` on
+  expiry, but a buggy or cached response could lie. We additionally reject
+  when `expires_at` is set to a non-zero value in the past. Per Graph
+  semantics, `expires_at: 0` means "never expires" (e.g. page tokens) — we
+  treat 0 as "not applicable", NOT as "expired in 1970".
+- **`/debug_token` ↔ `/me` cross-check.** `data.user_id` from the
+  `/debug_token` response must match `id` from `/me`. A mismatch is a strong
+  signal of a swapped or cached response; we raise rather than guess which
+  end is authoritative.
 
 Email handling: Facebook's `email` permission is optional — users can
 decline it, in which case `/me` omits the `email` field entirely. We treat
@@ -43,6 +57,7 @@ Failure semantics map to the OpenAPI contract:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -61,6 +76,21 @@ class GraphApiUnavailableError(Exception):
 class InvalidFacebookTokenError(Exception):
     """Access token failed validation: rejected by `/debug_token`, `/me` returned
     401, or the response shape didn't match the documented Graph contract."""
+
+
+@dataclass(frozen=True)
+class _DebugTokenData:
+    """The fields we extract from a `/debug_token` response, after structural
+    validation. Held briefly inside `verify_facebook_access_token` so the
+    cross-check against `/me` can compare `user_id` ↔ `id`.
+
+    `expires_at` follows Graph's convention: `0` means "never expires" (page
+    tokens, long-lived app tokens), any positive value is a Unix timestamp.
+    """
+
+    app_id: str
+    user_id: str
+    expires_at: int
 
 
 @dataclass(frozen=True)
@@ -91,11 +121,16 @@ def _build_app_access_token(app_id: str, app_secret: str) -> str:
     return f"{app_id}|{app_secret}"
 
 
-def _validate_debug_token_response(payload: Any, *, expected_app_id: str) -> None:
+def _validate_debug_token_response(payload: Any, *, expected_app_id: str) -> _DebugTokenData:
     """Inspect a `/debug_token` response and raise `InvalidFacebookTokenError`
     if it doesn't pass: token must be valid, not expired, and issued for the
     expected `app_id`. Per Graph API docs, the response shape is
-    `{"data": {"app_id": str, "is_valid": bool, "user_id": str, ...}}`.
+    `{"data": {"app_id": str, "is_valid": bool, "user_id": str,
+    "expires_at": int, ...}}`.
+
+    Returns the extracted `(app_id, user_id, expires_at)` for downstream
+    cross-check against `/me`. The expiry guard treats `expires_at: 0` as
+    "never expires" per Graph convention, NOT as "expired in 1970".
     """
     if not isinstance(payload, dict):
         raise InvalidFacebookTokenError("debug_token response is not a JSON object")
@@ -114,7 +149,26 @@ def _validate_debug_token_response(payload: Any, *, expected_app_id: str) -> Non
         # Token was issued for a different Facebook app. THIS is the attack
         # `/debug_token` defends against — `/me` alone would have let it
         # through.
+        # See module docstring § "Why /debug_token first" for the threat model.
         raise InvalidFacebookTokenError("access token was issued for a different app")
+
+    user_id = data.get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        raise InvalidFacebookTokenError("debug_token response missing `user_id`")
+
+    expires_at_raw = data.get("expires_at", 0)
+    # Graph returns this as an int; tolerate `bool` not being one of them
+    # (`isinstance(True, int)` is True so check int after bool exclusion).
+    if isinstance(expires_at_raw, bool) or not isinstance(expires_at_raw, int):
+        raise InvalidFacebookTokenError("debug_token `expires_at` is not an integer")
+    if expires_at_raw != 0 and expires_at_raw < int(time.time()):
+        # Defence-in-depth: even though `is_valid=true` already implies
+        # not-expired, a buggy / cached upstream response could disagree with
+        # `expires_at`. `0` per Graph means "never expires" (page tokens) and
+        # must NOT be treated as "expired at the epoch".
+        raise InvalidFacebookTokenError("access token is expired per debug_token")
+
+    return _DebugTokenData(app_id=app_id, user_id=user_id, expires_at=expires_at_raw)
 
 
 def _parse_me_response(payload: Any) -> FacebookIdentity:
@@ -223,7 +277,7 @@ def verify_facebook_access_token(
             except ValueError as exc:
                 raise InvalidFacebookTokenError("debug_token returned non-JSON body") from exc
 
-            _validate_debug_token_response(debug_payload, expected_app_id=app_id)
+            debug_data = _validate_debug_token_response(debug_payload, expected_app_id=app_id)
 
             me_resp = client.get(
                 ME_URL,
@@ -252,4 +306,11 @@ def verify_facebook_access_token(
         # to a verdict.
         raise GraphApiUnavailableError(f"Graph API transport error: {exc}") from exc
 
-    return _parse_me_response(me_payload)
+    identity = _parse_me_response(me_payload)
+    if debug_data.user_id != identity.sub:
+        # Cross-provider belt-and-braces: `/debug_token` asserted the token's
+        # `user_id`, `/me` returned the profile's `id`. They MUST agree —
+        # disagreement signals a swapped or cached response. Use a generic
+        # message so we don't echo either user id back to the caller.
+        raise InvalidFacebookTokenError("debug_token user_id does not match /me id")
+    return identity

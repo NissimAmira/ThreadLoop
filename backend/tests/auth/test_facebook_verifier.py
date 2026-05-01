@@ -7,6 +7,7 @@ test can exercise both the `/debug_token` and `/me` legs.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -59,14 +60,24 @@ def _make_transport(
     return httpx.MockTransport(handler)
 
 
-def _ok_debug_token(*, app_id: str = APP_ID, is_valid: bool = True) -> httpx.Response:
+def _ok_debug_token(
+    *,
+    app_id: str = APP_ID,
+    is_valid: bool = True,
+    user_id: str = "user-12345",
+    expires_at: int = 0,
+) -> httpx.Response:
+    """Build a happy `/debug_token` response. `expires_at=0` per Graph
+    convention means the token never expires (the documented default for
+    long-lived / page tokens) and is the safest test default."""
     return httpx.Response(
         200,
         json={
             "data": {
                 "app_id": app_id,
                 "is_valid": is_valid,
-                "user_id": "user-12345",
+                "user_id": user_id,
+                "expires_at": expires_at,
             }
         },
     )
@@ -154,7 +165,8 @@ def test_picture_flat_string_form_tolerated() -> None:
     transport = _make_transport(
         debug_token_response=_ok_debug_token(),
         me_response=httpx.Response(
-            200, json={"id": "u1", "name": "Z", "picture": "https://cdn.fb/x.png"}
+            200,
+            json={"id": "user-12345", "name": "Z", "picture": "https://cdn.fb/x.png"},
         ),
     )
     identity = verify_facebook_access_token(
@@ -168,7 +180,11 @@ def test_picture_nested_without_url_drops_to_none() -> None:
         debug_token_response=_ok_debug_token(),
         me_response=httpx.Response(
             200,
-            json={"id": "u1", "name": "Z", "picture": {"data": {"is_silhouette": True}}},
+            json={
+                "id": "user-12345",
+                "name": "Z",
+                "picture": {"data": {"is_silhouette": True}},
+            },
         ),
     )
     identity = verify_facebook_access_token(
@@ -238,6 +254,52 @@ def test_debug_token_returns_non_json_rejected() -> None:
         verify_facebook_access_token(
             USER_ACCESS_TOKEN, app_id=APP_ID, app_secret=APP_SECRET, transport=transport
         )
+
+
+def test_debug_token_with_past_expires_at_is_rejected() -> None:
+    """Belt-and-braces: even if Graph reports `is_valid=true`, a non-zero
+    `expires_at` in the past must fail-closed. Defends against a buggy / cached
+    upstream that disagrees with itself."""
+    one_hour_ago = int(time.time()) - 3600
+    transport = _make_transport(
+        debug_token_response=_ok_debug_token(expires_at=one_hour_ago),
+        me_response=_ok_me(),
+    )
+    with pytest.raises(InvalidFacebookTokenError, match="expired"):
+        verify_facebook_access_token(
+            USER_ACCESS_TOKEN, app_id=APP_ID, app_secret=APP_SECRET, transport=transport
+        )
+
+
+def test_debug_token_with_zero_expires_at_is_accepted() -> None:
+    """Per Graph convention `expires_at: 0` means "never expires" — page
+    tokens, long-lived tokens. Must NOT be treated as "expired in 1970"."""
+    transport = _make_transport(
+        debug_token_response=_ok_debug_token(expires_at=0),
+        me_response=_ok_me(),
+    )
+    identity = verify_facebook_access_token(
+        USER_ACCESS_TOKEN, app_id=APP_ID, app_secret=APP_SECRET, transport=transport
+    )
+    assert identity.sub == "user-12345"
+
+
+def test_debug_token_user_id_mismatch_with_me_is_rejected() -> None:
+    """`/debug_token` and `/me` must agree on the user id — a mismatch is
+    a strong signal of a swapped or cached response and the verifier raises
+    rather than guessing which end is authoritative. The error message must
+    NOT echo either user id back to the caller."""
+    transport = _make_transport(
+        debug_token_response=_ok_debug_token(user_id="user-DEBUG-999"),
+        me_response=_ok_me(user_id="user-ME-111"),
+    )
+    with pytest.raises(InvalidFacebookTokenError, match="does not match") as exc_info:
+        verify_facebook_access_token(
+            USER_ACCESS_TOKEN, app_id=APP_ID, app_secret=APP_SECRET, transport=transport
+        )
+    # Generic message — neither id leaks into the error.
+    assert "user-DEBUG-999" not in str(exc_info.value)
+    assert "user-ME-111" not in str(exc_info.value)
 
 
 # ----- /me failure paths -----------------------------------------------------
