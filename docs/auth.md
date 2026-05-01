@@ -308,6 +308,17 @@ the security guarantee comes from two server-side calls to the Graph API.
   flag) plugs in cleanly. Account merging across `Facebook ↔ Google/Apple`
   is therefore exclusively user-initiated through the linking flow shipping
   in #18.
+  - **The exemption is bidirectional.** An existing Facebook row also won't
+    trigger `link_required` on an incoming Google or Apple sign-in, because
+    both branches require `existing.email_verified=true` to consider a row
+    a collision candidate. Net effect: a user who signs up with Facebook
+    first and Google second gets two unrelated accounts with no link prompt
+    in either direction. This is defensible — we don't trust Facebook's
+    email at all, in either role — but it means Epic #11's AC ("Account-
+    linking prompt fires when an email collision is detected across
+    providers") is fully exempt for Facebook identities. Cross-provider
+    linking that involves a Facebook account is exclusively user-initiated
+    through #18.
 - **No relay-equivalent.** Apple's `is_private_email` bypass exists because
   Apple's own ID token tells us the email is a relay address; Facebook has
   no analogous signal because it never claims verification in the first
