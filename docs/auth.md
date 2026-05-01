@@ -26,10 +26,11 @@ still appear in `/docs` and the contract doesn't lie about what the
 deployed binary will look like once the flag is flipped.
 
 When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless all of
-`GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, and `REFRESH_TOKEN_HMAC_KEY` are set
-non-empty. This catches the common misconfiguration where an unset
-`GOOGLE_CLIENT_ID` would silently make every sign-in look like "your token
-is invalid" (401) when the real fault is server config.
+`GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, `REFRESH_TOKEN_HMAC_KEY`,
+`APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY`
+are set non-empty. This catches the common misconfiguration where an unset
+provider secret would silently make every sign-in look like "your token is
+invalid" (401) when the real fault is server config.
 
 Rollout sequence (RFC 0001):
 1. Implementation lands flag-off.
@@ -195,6 +196,70 @@ and merges identities.
 - **Unconfigured `GOOGLE_CLIENT_ID`:** the verifier raises rather than
   silently accepting any well-formed token. Misconfigured deploys fail loudly.
 
+### Apple specifics
+
+- **JWKS:** `https://appleid.apple.com/auth/keys`, cached in-process for 1
+  hour. JWKS unreachable → 503. Same invalidate-and-retry-once rotation
+  handler as Google, since Apple also rotates signing keys on a multi-day
+  cadence.
+- **Issuer claim:** must equal `https://appleid.apple.com` exactly.
+- **Audience claim:** must equal `APPLE_CLIENT_ID` (the **Service ID** from
+  the Apple Developer portal, not the Team ID). Accepts list form too.
+- **`is_private_email` (Hide-My-Email) bypass.** When the ID token carries
+  `is_private_email: true`, the `email` claim is a per-app relay address
+  (`*@privaterelay.appleid.com`). Matching that against existing rows would
+  never legitimately succeed — and worse, would let an attacker who created
+  a relay address provoke the link flow against random verified-email
+  accounts. The Apple callback **skips the cross-provider collision check
+  entirely** on relay addresses and treats the sign-in as a fresh identity.
+  Tested explicitly in `test_apple_relay_bypasses_link_required`.
+- **Name only on first sign-in.** Apple includes `name` in its JS / native
+  callback payload only on the very first authentication of a session —
+  and only when the app requested the `name` scope. The client passes it
+  in the `name` body field of `POST /api/auth/apple/callback` (optional);
+  the backend uses it to seed `display_name` on a freshly-created user. On
+  subsequent sign-ins the existing row's `display_name` is reused — we
+  never overwrite from a missing-name token.
+- **Display-name fallback:** if `name` is absent on a first sign-in, we use
+  `email` if present, then literal `"ThreadLoop user"` (mirrors Google's
+  fallback).
+- **`email_verified` and `is_private_email` normalization:** Apple sends
+  these as either booleans or the strings `"true"`/`"false"`; the verifier
+  normalizes both forms.
+- **`code` field on the request.** Required by the OpenAPI contract but not
+  exchanged in this PR. Apple's `code` exchange at
+  `appleid.apple.com/auth/token` would only matter if we wanted Apple-side
+  refresh tokens; our refresh-token lifecycle lives in `refresh_tokens` and
+  the ID token alone is sufficient to establish identity. The
+  `client_secret` JWT generator (see below) is exposed for a future job
+  without being on the hot path of this callback.
+- **`client_secret` is itself a JWT.** Apple's token endpoint expects the
+  `client_secret` parameter to be an ES256-signed JWT, not a static string.
+  Claims:
+  - `iss` = `APPLE_TEAM_ID` (10-character team identifier from the
+    Apple Developer portal Membership page).
+  - `iat` = now.
+  - `exp` = now + 1 hour. (Apple permits up to 6 months; we keep it short
+    so a leaked `.p8` only buys an attacker 1 hour and so manual rotation
+    propagates within a process restart.)
+  - `aud` = `https://appleid.apple.com`.
+  - `sub` = `APPLE_CLIENT_ID` (the Service ID).
+  - Header `alg` = `ES256`, `kid` = `APPLE_KEY_ID`.
+
+  Signed with the contents of the `.p8` key downloaded from the Apple
+  Developer portal → Keys, and stored in `APPLE_PRIVATE_KEY` as multi-line
+  PEM. The signed JWT is cached in-process for 50 minutes (under the 1-hour
+  `exp`) so we don't resign per request.
+- **Deferred `client_secret` rotation.** RFC 0001 § Risks tracks the open
+  question of a scheduled `.p8` rotation job. We've deferred it: rotation
+  cadence is "manually rotate the `.p8` and bounce the process" for now,
+  which the 50-minute in-process cache window naturally accommodates. A
+  scheduled job becomes worthwhile when we're running enough replicas that
+  bouncing the fleet for rotation is operationally awkward.
+- **Unconfigured Apple secrets:** as with Google, the verifier raises rather
+  than silently accepting any well-formed token; the `client_secret`
+  signing helper raises rather than producing an unsigned JWT.
+
 ## Buyer/seller dual role
 
 One `users` row per person. Two capability flags govern actions:
@@ -228,20 +293,26 @@ re-authenticating.
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
 - Provider SDK integration (web + mobile)
-- `/api/auth/apple/callback` (#15) and `/api/auth/facebook/callback` (#16)
+- `/api/auth/facebook/callback` (#16)
 - `/api/auth/refresh` + `/api/auth/logout` + `/api/me` + session middleware (#17)
 - Account-linking *resolution* — `POST /api/auth/link` (#18). Detection is
-  already wired into the Google callback (this PR).
+  already wired into the Google and Apple callbacks.
 - `require_buyer` / `require_seller` dependencies
+- Scheduled `client_secret` JWT rotation job (RFC 0001 § Risks).
 
 Already landed:
 - OpenAPI + TS contract for the auth endpoints (#12, PR #26).
 - `refresh_tokens` table + `RefreshToken` model with rotation/expiry/revocation
   helpers (#22, PR #29).
 - `POST /api/auth/google/callback`, the session helpers
-  (`backend/app/auth/session.py`) #15/#16/#17 will reuse, the Google JWKS
+  (`backend/app/auth/session.py`) #15/#16/#17 reuse, the Google JWKS
   verifier with in-process caching, the HMAC-SHA-256 refresh-token hash, and
-  cross-provider link-required detection (#14, this PR).
+  cross-provider link-required detection (#14, PR #31).
+- `POST /api/auth/apple/callback`, the Apple JWKS verifier with the same
+  invalidate-and-retry-once rotation handler, the ES256 `client_secret`
+  JWT generator with 50-minute in-process cache, the Hide-My-Email relay
+  bypass for cross-provider collision detection, and the name-only-on-
+  first-signin display-name handling (#15, this PR).
 
-Until the remaining callback routes ship, `users` rows for Apple / Facebook
-can still be inserted via Alembic seed data for local development.
+Until the remaining callback route ships, `users` rows for Facebook can
+still be inserted via Alembic seed data for local development.

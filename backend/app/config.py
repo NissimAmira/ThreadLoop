@@ -39,6 +39,19 @@ class Settings(BaseSettings):
     # OIDC `aud` claim we require on every Google ID token.
     google_client_id: str = ""
 
+    # Apple Sign In credentials. The four values together let the backend both
+    # verify Apple ID tokens (`apple_client_id` is the `aud`) and sign the
+    # `client_secret` JWT Apple's token endpoint expects (Apple is the only
+    # provider whose `client_secret` is itself a JWT, signed with a downloaded
+    # `.p8` key — see `app/auth/apple.py`). Sourced from the Apple Developer
+    # portal: Identifiers → Services IDs (`apple_client_id`), team membership
+    # page (`apple_team_id`), Keys → Key ID (`apple_key_id`), and the PEM
+    # contents of the downloaded `.p8` (`apple_private_key`, multi-line PEM).
+    apple_client_id: str = ""
+    apple_team_id: str = ""
+    apple_key_id: str = ""
+    apple_private_key: str = ""
+
     access_token_ttl_seconds: int = 15 * 60
     refresh_token_ttl_days: int = 30
     # Pending-link tokens are short-lived per RFC 0001 § Failure modes.
@@ -73,6 +86,14 @@ class Settings(BaseSettings):
                 missing.append("JWT_SIGNING_KEY")
             if not self.refresh_token_hmac_key:
                 missing.append("REFRESH_TOKEN_HMAC_KEY")
+            if not self.apple_client_id:
+                missing.append("APPLE_CLIENT_ID")
+            if not self.apple_team_id:
+                missing.append("APPLE_TEAM_ID")
+            if not self.apple_key_id:
+                missing.append("APPLE_KEY_ID")
+            if not self.apple_private_key:
+                missing.append("APPLE_PRIVATE_KEY")
             if missing:
                 raise ValueError(
                     "AUTH_ENABLED=true but the following auth secrets are unset: "

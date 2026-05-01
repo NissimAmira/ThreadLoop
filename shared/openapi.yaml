@@ -39,7 +39,7 @@ paths:
         Single endpoint that dispatches by `provider` path parameter.
         The request body shape varies by provider (see `SsoCallbackInput`):
           - `google`:   `{ id_token }`
-          - `apple`:    `{ id_token, code }`
+          - `apple`:    `{ id_token, code, name? }`
           - `facebook`: `{ access_token }`
 
         On success, returns a `Session` and sets a `Set-Cookie: refresh_token=…`
@@ -277,6 +277,14 @@ components:
       properties:
         id_token: { type: string, description: "Apple-issued ID token (JWT)." }
         code:     { type: string, description: "Apple authorization code; used to redeem an Apple refresh token server-side." }
+        name:
+          type: string
+          nullable: true
+          description: |
+            User's display name as surfaced by Apple's JS SDK / native flow on
+            the first sign-in only (and only when the app requested the `name`
+            scope). Subsequent sign-ins omit it entirely; the backend reuses
+            the existing `users.display_name` in that case.
 
     FacebookSsoCallbackInput:
       type: object
