@@ -198,3 +198,28 @@ def test_me_with_token_signed_by_different_key_returns_401(
     resp = auth_client.get("/api/me", headers={"Authorization": f"Bearer {forged}"})
     assert resp.status_code == 401
     assert resp.json()["detail"]["code"] == "invalid_token"
+
+
+def test_me_when_auth_disabled_returns_404(auth_client: TestClient, pg_url: str) -> None:
+    """RFC 0001 § Rollout plan step 1: while `AUTH_ENABLED=false`, the auth
+    surface — including identity look-up — must look like it doesn't exist.
+    Mirrors `test_auth_disabled_returns_404` for the Google callback. Without
+    the explicit `require_auth_enabled` gate on the users router, this
+    request would still 401 (which leaks subsystem presence) instead of
+    404."""
+    user = _seed_user(pg_url)
+    token = _mint_access_token(user.id, jwt_signing_key="test-jwt-signing-key")
+    prior = app.dependency_overrides.get(get_settings)
+    app.dependency_overrides[get_settings] = lambda: make_test_settings(
+        auth_enabled=False,
+        database_url=pg_url,
+        refresh_cookie_secure=False,
+    )
+    try:
+        resp = auth_client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prior
+    assert resp.status_code == 404

@@ -15,15 +15,19 @@ ThreadLoop is **SSO-only**. There are no passwords stored anywhere.
 
 Per RFC 0001 § Rollout plan step 1, the entire auth subsystem ships behind a
 single boolean flag. While `AUTH_ENABLED=false` (the default), every
-`/api/auth/*` route returns 404 — the implementation is in the binary but
-unreachable. This lets us land each provider, the refresh / logout / `/me`
-work, and account-linking incrementally without exposing half-built flows.
+`/api/auth/*` route AND `/api/me` return 404 — the implementation is in the
+binary but unreachable. This lets us land each provider, the refresh /
+logout / `/me` work, and account-linking incrementally without exposing
+half-built flows.
 
 The flag is enforced as a router-level FastAPI dependency
-(`require_auth_enabled` in `app/routers/auth.py`), not by conditionally
-registering the router, so OpenAPI generation stays honest — the routes
-still appear in `/docs` and the contract doesn't lie about what the
-deployed binary will look like once the flag is flipped.
+(`require_auth_enabled`, exported from `app/auth/deps.py` and applied to
+both the auth router and the users router), not by conditionally
+registering routers, so OpenAPI generation stays honest — the routes still
+appear in `/docs` and the contract doesn't lie about what the deployed
+binary will look like once the flag is flipped. Both surfaces are gated
+identically: `/api/me` 404s under flag-off in lockstep with `/api/auth/*`
+so a probe can't tell the auth subsystem exists from the response.
 
 When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless all of
 `GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, `REFRESH_TOKEN_HMAC_KEY`,
@@ -136,9 +140,17 @@ CREATE INDEX ix_refresh_tokens_user_id ON refresh_tokens(user_id);
   and returns `401`. This is the theft response from RFC 0001 § Failure
   modes: we can't distinguish a benign replay (e.g. a stale tab) from
   active token theft, so we burn the entire refresh-token surface and
-  force re-auth. Logged at WARNING level with the `user_id` for
-  operability. Tested in `test_refresh_route.py::
-  test_refresh_with_revoked_token_triggers_reuse_detection`.
+  force re-auth. Logged at WARNING level with `user_id`, the row's
+  `issued_at`, and the age delta — so ops can distinguish a benign
+  back-button replay (small delta) from a stale token revived weeks
+  later (large delta = real theft signal). Tested in
+  `test_refresh_route.py::test_refresh_with_revoked_token_triggers_reuse_detection`.
+- **Quiet failure paths log differentiated reasons.** The other three
+  401 paths (`hash_not_found`, `token_expired`, `user_not_found`) emit
+  `INFO` lines tagged with the reason so ops can grep them apart. The
+  log lines never carry the cookie value, the cookie's hash, or any
+  other client-controlled data — `user_id` is included only when the
+  row actually exists.
 - **Logout.** Revokes the current row only (`revoked_at = now()`).
   Idempotent — a missing/unknown/already-revoked cookie still returns 204.
   The Set-Cookie clear is unconditional. The route accepts no body.
@@ -173,6 +185,15 @@ Rejects (all → 401):
 - User row not found (account deleted between issue and use) →
   `invalid_token`. Same envelope to avoid leaking "this user used to
   exist" to a probe.
+
+**Access-token claims:** `sub` (user id), `iat`, `exp`, `typ=access`,
+and `jti` (a fresh `uuid4().hex` per mint). `jti` is included so two
+consecutive mints in the same wall-clock second produce byte-distinct
+JWTs — without it, deterministic HS256 over identical claims yields the
+same encoding and rotation across the refresh boundary becomes
+unobservable. `require_user` ignores the claim today; it's the
+foundation for any future server-side denylist (RFC 0001 § Risks
+explicitly defers a JWT denylist).
 
 **Role gates (`require_seller`/`require_buyer`) are NOT in this module.**
 They're deferred to issue #37 per the 2026-05-01 vertical-slicing pivot

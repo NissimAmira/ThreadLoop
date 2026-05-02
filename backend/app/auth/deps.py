@@ -42,6 +42,24 @@ logger = logging.getLogger(__name__)
 _ACCESS_TOKEN_TYP = "access"
 
 
+def require_auth_enabled(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    """Gate every route that hangs off this dependency. Returns 404 (not 503)
+    when the flag is off so an unauthenticated probe can't even tell the
+    subsystem exists.
+
+    Lives here rather than in `app.routers.auth` so `app.routers.users` can
+    apply the same gate to `/api/me` without importing across the routers
+    package (which would otherwise create a circular reference once `users`
+    starts pulling more from the auth package). Both `/api/auth/*` and
+    `/api/me` are part of the same RFC-0001 rollout switch — same flag, same
+    response, same dep.
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
 def _unauthorized(code: str, message: str) -> HTTPException:
     """Build the 401 envelope expected by the OpenAPI `Error` schema."""
     return HTTPException(

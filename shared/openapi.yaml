@@ -141,6 +141,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: |
+            Auth subsystem disabled (`AUTH_ENABLED=false`). Mirrors the
+            behaviour of every `/api/auth/*` route while the rollout flag is
+            off — see RFC 0001 § Rollout plan. The implementation is in the
+            binary but the route is unreachable until the flag flips.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/listings:
     get:

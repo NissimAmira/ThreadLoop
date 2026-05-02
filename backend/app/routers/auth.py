@@ -32,6 +32,7 @@ from app.auth.apple import (
     verify_apple_id_token,
 )
 from app.auth.apple import JwksUnavailableError as AppleJwksUnavailableError
+from app.auth.deps import require_auth_enabled
 from app.auth.facebook import (
     GraphApiUnavailableError,
     InvalidFacebookTokenError,
@@ -65,20 +66,12 @@ from app.models import RefreshToken, User
 logger = logging.getLogger(__name__)
 
 
-def require_auth_enabled(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> None:
-    """Gate every route on this router. Returns 404 (not 503) when the flag
-    is off so an unauthenticated probe can't even tell the subsystem exists.
-
-    Attached as a router-level dependency rather than baked into each handler
-    so OpenAPI generation still describes the routes — `/docs` stays honest
-    about what the API surface will look like once the flag is flipped.
-    """
-    if not settings.auth_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-
-
+# `require_auth_enabled` lives in `app.auth.deps` so `app.routers.users` can
+# apply the same gate to `/api/me` without an inter-router import. Attaching
+# it as a router-level dependency (rather than baking the check into each
+# handler) keeps OpenAPI generation honest — `/docs` still describes the
+# routes, just with a 404 response code in the `auth_enabled=False` rollout
+# state.
 router = APIRouter(
     prefix="/auth",
     tags=["auth"],
@@ -282,9 +275,7 @@ def _refresh_failure_response(
     return payload
 
 
-_INVALID_REFRESH_MESSAGE = (
-    "Refresh token is missing, expired, revoked, or has been reused."
-)
+_INVALID_REFRESH_MESSAGE = "Refresh token is missing, expired, revoked, or has been reused."
 
 
 @router.post(
@@ -341,6 +332,10 @@ def refresh_session(
     if row is None:
         # Hash didn't match anything we issued. Could be stale / forged.
         # Clear the bad cookie so the client doesn't keep replaying it.
+        # Log at INFO with a machine-greppable reason — no row exists, so
+        # there's no user_id to attach. Don't include the cookie value or
+        # its hash; both are client-controlled / sensitive.
+        logger.info("Refresh rejected: %s", "hash_not_found")
         return _refresh_failure_response(
             code="invalid_refresh_token",
             message=_INVALID_REFRESH_MESSAGE,
@@ -364,9 +359,15 @@ def refresh_session(
             .values(revoked_at=now)
         )
         db.commit()
+        # Enrich the WARNING with the row's age so ops can distinguish a
+        # benign back-button replay (small delta) from a stale token revived
+        # weeks later (large delta — real theft signal). Still no token
+        # contents / hash on the line.
         logger.warning(
-            "Refresh-token reuse detected for user_id=%s; revoked all tokens",
+            "Refresh-token reuse detected for user_id=%s issued_at=%s age=%ss; revoked all tokens",
             row.user_id,
+            row.issued_at.isoformat(),
+            (now - row.issued_at).total_seconds(),
         )
         return _refresh_failure_response(
             code="invalid_refresh_token",
@@ -378,7 +379,9 @@ def refresh_session(
     if row.is_expired(now):
         # Past `expires_at`. Don't bother revoking — already inert. Still
         # clear the client cookie so future requests don't carry the
-        # graveyard token.
+        # graveyard token. Log at INFO; user_id from the row is fine
+        # (server-side identifier, not client-controlled).
+        logger.info("Refresh rejected: %s user_id=%s", "token_expired", row.user_id)
         return _refresh_failure_response(
             code="invalid_refresh_token",
             message=_INVALID_REFRESH_MESSAGE,
@@ -392,6 +395,7 @@ def refresh_session(
         # User deleted between issuance and now. Shouldn't normally happen
         # (CASCADE on user delete clears their tokens), but defend against
         # races. Same 401 envelope; nothing to leak.
+        logger.info("Refresh rejected: %s user_id=%s", "user_not_found", row.user_id)
         return _refresh_failure_response(
             code="invalid_refresh_token",
             message=_INVALID_REFRESH_MESSAGE,

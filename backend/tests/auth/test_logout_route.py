@@ -175,6 +175,33 @@ def test_logout_with_unknown_token_returns_204(
     assert resp.status_code == 204
 
 
+def test_logout_when_auth_disabled_returns_404(auth_client: TestClient, pg_url: str) -> None:
+    """RFC 0001 § Rollout plan step 1 mirror for the lifecycle routes. The
+    logout route must 404 (not 204 silently) under flag-off so a probe
+    can't tell the auth subsystem exists. Capture/restore the prior
+    `get_settings` override so this test composes with whatever the
+    fixture installed."""
+    plaintext = "ought-not-to-be-checked"
+    _seed_user_and_active_token(pg_url, plaintext=plaintext)
+    prior = app.dependency_overrides.get(get_settings)
+    app.dependency_overrides[get_settings] = lambda: make_test_settings(
+        auth_enabled=False,
+        database_url=pg_url,
+        refresh_cookie_secure=False,
+    )
+    try:
+        resp = auth_client.post(
+            "/api/auth/logout",
+            cookies={"refresh_token": plaintext},
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prior
+    assert resp.status_code == 404
+
+
 def test_logout_twice_is_idempotent(auth_client: TestClient, pg_url: str) -> None:
     plaintext = "double-logout"
     user_id = _seed_user_and_active_token(pg_url, plaintext=plaintext)
