@@ -70,7 +70,31 @@ def test_mint_access_token_round_trips_and_carries_user_id() -> None:
     assert claims["typ"] == "access"
     assert claims["iat"] == int(now.timestamp())
     assert claims["exp"] == int(now.timestamp()) + 900
+    # `jti` is a hex-encoded uuid4 — purely for byte-distinguishability
+    # between consecutive mints. `require_user` ignores this claim today;
+    # it's the foundation for any future server-side denylist.
+    assert isinstance(claims["jti"], str)
+    assert len(claims["jti"]) == 32
     assert expires_at == now + timedelta(seconds=900)
+
+
+def test_mint_access_token_jti_is_unique_across_consecutive_mints() -> None:
+    """Two back-to-back mints with identical inputs (same `now`, same user)
+    must still produce distinct JWTs. Without `jti`, deterministic HS256
+    over identical claims would yield byte-identical encodings — that's
+    what made slice-1 unable to assert access-JWT rotation across the
+    refresh boundary before this fix."""
+    settings = Settings(jwt_signing_key="signing-key", access_token_ttl_seconds=900)
+    user = _user()
+    now = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
+
+    token_a, _ = mint_access_token(user, settings=settings, now=now)
+    token_b, _ = mint_access_token(user, settings=settings, now=now)
+
+    assert token_a != token_b
+    claims_a = jwt.decode(token_a, settings.jwt_signing_key)
+    claims_b = jwt.decode(token_b, settings.jwt_signing_key)
+    assert claims_a["jti"] != claims_b["jti"]
 
 
 def test_mint_access_token_signed_with_configured_key() -> None:

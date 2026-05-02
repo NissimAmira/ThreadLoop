@@ -154,12 +154,12 @@ def test_slice_1_demo_signin_to_logout_full_loop(
     )
     assert refresh.status_code == 200, refresh.text
     new_access_token: str = refresh.json()["access_token"]
-    # The access JWT carries `iat` at second resolution and a stable `sub`/
-    # `typ`, so two refreshes in the same wall-clock second produce the
-    # same encoded JWT (deterministic HS256 signing). That's by design — a
-    # 15-minute access JWT shared between two requests within the same
-    # second is just the same token. The rotation we DO guarantee at the
-    # second boundary is the refresh cookie (it's a fresh random value).
+    # `jti` (a fresh UUID per mint) makes the two access JWTs byte-distinct
+    # even within the same wall-clock second, so we can assert rotation
+    # directly across the refresh boundary.
+    assert new_access_token != initial_access_token, (
+        "refresh must rotate the access JWT (jti makes them byte-distinct)"
+    )
     new_refresh_cookie = _set_cookie_value(refresh.headers, "refresh_token")
     assert new_refresh_cookie is not None
     assert new_refresh_cookie != initial_refresh_cookie, (

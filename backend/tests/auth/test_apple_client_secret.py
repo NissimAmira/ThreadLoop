@@ -10,6 +10,7 @@ reuse it without reaching into private state.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 from authlib.jose import JsonWebKey, jwt
@@ -288,6 +289,84 @@ def test_cache_invalidates_when_private_key_pem_changes(
     jwt.decode(second, pub_other)
     with pytest.raises(Exception):  # noqa: B017 - authlib raises various subtypes
         jwt.decode(second, pub_orig)
+
+
+def test_cache_invalidates_when_client_id_changes(apple_p8_pem: str) -> None:
+    """Symmetry with `team_id` / PEM rotation: rotating the Service ID
+    (`client_id`, the JWT's `sub`) must resign rather than serve the cached
+    JWT. A stale `sub` claim would cause Apple to reject the token at the
+    `/auth/token` endpoint — symptom looks identical to the pre-fix
+    `team_id` regression."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    second = get_client_secret(
+        team_id=TEAM_ID,
+        client_id="com.threadloop.test.OTHERSERVICE",
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    assert first != second, "rotated client_id must force a fresh JWT"
+
+    pub = JsonWebKey.import_key(apple_p8_pem)
+    first_claims = jwt.decode(first, pub)
+    second_claims = jwt.decode(second, pub)
+    assert first_claims["sub"] == CLIENT_ID
+    assert second_claims["sub"] == "com.threadloop.test.OTHERSERVICE"
+
+
+def test_cache_invalidates_when_key_id_changes(apple_p8_pem: str) -> None:
+    """Symmetry: rotating the `kid` header (Apple's key identifier) must
+    resign. `kid` is what Apple uses to look up which public key to verify
+    the JWT's signature with — a stale `kid` paired with a freshly-uploaded
+    private key in the developer portal would fail verification at Apple's
+    token endpoint."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    second = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id="OTHERKID0002",
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    assert first != second, "rotated key_id must force a fresh JWT"
+
+    # `kid` lives in the JWT header, not the payload. Decode the header
+    # segment directly (same trick used in `test_sign_jwt_has_required_claims`).
+    import base64
+    import json as _json
+
+    def _header(encoded: str) -> dict[str, object]:
+        seg = encoded.split(".")[0]
+        padding = "=" * (-len(seg) % 4)
+        return cast(
+            dict[str, object],
+            _json.loads(base64.urlsafe_b64decode(seg + padding).decode("ascii")),
+        )
+
+    assert _header(first)["kid"] == KEY_ID
+    assert _header(second)["kid"] == "OTHERKID0002"
 
 
 def test_cache_keeps_serving_unchanged_inputs_within_ttl(

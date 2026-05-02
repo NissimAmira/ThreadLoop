@@ -59,8 +59,10 @@ def health(
     meili_s = _check_meili(settings.meili_url)
 
     overall: DependencyStatus = (
-        "ok" if all(s == "ok" for s in (db_s, redis_s, meili_s))
-        else "down" if any(s == "down" for s in (db_s, redis_s, meili_s))
+        "ok"
+        if all(s == "ok" for s in (db_s, redis_s, meili_s))
+        else "down"
+        if any(s == "down" for s in (db_s, redis_s, meili_s))
         else "degraded"
     )
 
