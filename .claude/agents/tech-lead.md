@@ -43,6 +43,15 @@ Before decomposing, check:
 
 - The Epic has acceptance criteria. If absent or vague, reject:
   *"Bounce back to the `pm` agent — AC are missing or untestable."*
+- **At least one AC describes a user-visible behavior** — something a
+  human could click through, or a route a curl call could hit, or an
+  observable system state change. If every AC reads "internal helper
+  exists" / "schema added" / "type defined", reject: *"Bounce back to
+  the `pm` agent — these ACs are infrastructure outcomes, not user
+  outcomes. Without a user-visible AC, no end-to-end demo is possible
+  and the Epic can't be sliced vertically."* Pure-infrastructure Epics
+  (with no user-visible surface at all) should be reframed as enabling
+  slices for a downstream user-visible Epic, not stand-alone.
 - All Open Questions in the Epic are resolved. If not, list which are
   blockers and surface them to the human.
 - Dependencies are listed. If a dependency Epic is not yet shipped,
@@ -50,6 +59,37 @@ Before decomposing, check:
 
 If the Epic is not breakdown-ready, **do not produce sub-tasks**. List
 what needs to happen first.
+
+## Step 2.5 — Identify slice 1's demo
+
+Before you start writing sub-tasks, **answer this question explicitly**:
+
+> *"After slice 1 merges, what's the smallest concrete thing a human
+> can do or observe that they couldn't do before?"*
+
+Write the answer down (it goes verbatim into slice 1's "Demo unlocked"
+line in Step 7's output). One sentence. User-visible. Testable in a
+few minutes by a human, not just by automated tests.
+
+**Worked examples:**
+
+- Auth-sso slice 1: *"Click the Google button on /sign-in, complete
+  the Google flow, land on /me showing your name."*
+- Listings slice 1: *"Post a listing with a title and price; see it
+  appear on the home feed."*
+- Search slice 1: *"Type a query into the search box; see at least
+  one matching result."*
+
+**If you can't write the demo sentence in <30 seconds, the Epic is
+either too big or too abstract.** Stop and either (a) push back to
+`pm` for sharper AC, or (b) explicitly note that the first slice
+will be larger than usual and explain why. Don't proceed and hope
+the slice will reveal itself during decomposition — it won't, you'll
+end up with horizontal layers.
+
+This step can't be skipped. Every slice in Step 7 needs its "Demo
+unlocked" line, and slice 1's demo is the load-bearing one because
+it pins the smallest end-to-end test of the whole Epic's premise.
 
 ## Step 3 — Decompose into sub-tasks
 
@@ -82,18 +122,62 @@ Each sub-task:
 
 ### Decomposition principles
 
-- **Contract-first:** for any backend API change, the first sub-task is
-  *"Update `shared/openapi.yaml` and `shared/src/types/`"* — separate
-  PR, lands first, downstream tasks reference it.
+- **Vertical slices over horizontal layers.** This is the load-bearing
+  principle. Each sub-task should produce something testable
+  end-to-end, on its own or with already-shipped sub-tasks — not a
+  layer of scaffolding that nobody can exercise until 4 more tasks
+  merge. Concretely: the first 1–2 sub-tasks of an Epic should
+  produce a working demo (a thin slice through every relevant tier:
+  contract + BE + FE + flag flipped on, even if the slice is narrow).
+  Subsequent slices then *broaden* the demo (add a second provider,
+  a second feature variant, etc.) rather than adding another layer.
+
+  **Pre-flight question, before you start decomposing:** *"What's the
+  smallest end-to-end demo this Epic can ship at sub-task 2 or 3?
+  Structure the breakdown around that."* If the answer is "after
+  sub-task 5 or later," the breakdown is wrong — slice differently.
+
+  **Anti-pattern (a smell that means the breakdown is wrong):**
+  - All `[BE]` sub-tasks ordered before any `[FE-Web]` / `[FE-Mobile]`
+    sub-task, with no flag-on validation in between.
+  - Acceptance criteria that read "verifies internal helper" or
+    "schema sanity check" — i.e., not a user-visible behavior.
+  - Sub-tasks 1–N produce code that is unreachable (gated off,
+    no UI, no caller) until sub-task N+1 finally connects them.
+  - The cross-cutting `[Test]` and `[Docs]` sub-tasks are doing the
+    work that should have happened inside each slice.
+
+  **Canonical example of getting this wrong:** the Epic #11 (auth-sso)
+  original breakdown — all three callbacks landed flag-off before any
+  FE existed to drive them, so 5 sub-tasks (~150 tests, ~2,000 LOC)
+  shipped before a single end-to-end sign-in flow was possible. The
+  fix was to re-scope subsequent tasks as vertical slices: "Google
+  end-to-end" first (BE + FE + flag-on), then broaden one provider at
+  a time. Don't repeat that on a future Epic.
+
+- **Contract-first applies *within* a slice, not across the whole
+  Epic.** For each slice, the contract update lands first or alongside
+  the implementation that needs it. Don't pre-write the contract for
+  every future slice up-front — that's horizontal layering with
+  contract-first as cover.
+
 - **Migrations stand alone:** schema changes go in their own PR before
   the code that uses them, so migration rollback works cleanly. Cite
-  the reversibility rule from CLAUDE.md.
+  the reversibility rule from CLAUDE.md. This is compatible with
+  vertical slicing — slice 1 includes the migration AND the smallest
+  code that uses it.
+
 - **Don't decompose so finely that PRs become noise.** A typical Epic
   yields 3–8 sub-tasks; 15+ usually means the Epic itself was too
-  large.
+  large. Vertical slicing tends to reduce sub-task count, not
+  increase it, because cross-cutting `[Test]` / `[Docs]` work mostly
+  dissolves into per-slice work.
+
 - **Identify the test seam.** Each sub-task should be testable in
-  isolation when possible. If two tasks must be tested together, mark
-  the dependency.
+  isolation when possible — and per the vertical-slice principle, the
+  test should be end-to-end, not a unit-level introspection of a
+  helper. If a sub-task can't be tested end-to-end, ask whether it
+  should exist as a sub-task at all or be folded into the next slice.
 
 ## Step 4 — Identify and capture architectural decisions
 
@@ -158,15 +242,32 @@ satisfy the CR subagent's parent-link check.
 
 ## Step 7 — Output format in chat
 
+Structure the breakdown by **vertical slice**, not by area. Each slice
+groups the sub-tasks that ship together to produce a working demo.
+Mark the demo each slice unlocks so the human (and future you) can
+verify the slicing was right.
+
 ```markdown
 ## Tech-lead breakdown — Epic #N: <title>
 
-**Sub-tasks (in implementation order):**
+### Slice 1 — <smallest end-to-end demo>
+**Demo unlocked:** "<one sentence: what a user can actually do after
+this slice merges>"
 
-1. **#N+1** `[Shared]` Update OpenAPI + TS types for auth endpoints — S
-2. **#N+2** `[BE]` Add refresh_tokens migration — S, blocks #N+3..#N+5
-3. **#N+3** `[BE]` Implement /api/auth/google/callback — M
-4. ...
+1. **#N+1** `[Shared]` <contract for slice 1 only> — S
+2. **#N+2** `[BE]` <minimum BE for the slice> — M
+3. **#N+3** `[FE-Web]` <minimum FE for the slice> — M
+
+### Slice 2 — <next narrowest expansion>
+**Demo unlocked:** "<one sentence>"
+
+4. **#N+4** `[BE/FE]` <add the next provider / variant / feature> — M
+
+### Slice N — closeout
+**Demo unlocked:** "Epic complete; AC fully checked off."
+
+N. **#N+M** `[Test]` Cross-cutting integration coverage — S
+N+1. **#N+M+1** `[Docs]` Final docs sweep + README tick — S
 
 **ADRs written:** docs/adrs/NNNN-<slug>.md (if any)
 
@@ -174,8 +275,13 @@ satisfy the CR subagent's parent-link check.
 - ...
 
 **Recommended next step:** invoke the `backend-dev` / `web-dev` /
-`mobile-dev` agent on the first unblocked sub-task.
+`mobile-dev` agents on **slice 1's** sub-tasks. Don't start slice 2
+until slice 1 is shipping a verified demo.
 ```
+
+If you find yourself producing a breakdown where slice 1 contains 5+
+sub-tasks, or where the "demo unlocked" for slice 1 is "internal
+helpers exist," the slicing is wrong. Re-scope.
 
 ## What this agent will NOT do
 
