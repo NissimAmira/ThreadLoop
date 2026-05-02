@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
@@ -79,9 +80,16 @@ def mint_access_token(
         "sub": str(user.id),
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
-        # `typ` lets #17's middleware reject link tokens presented as bearer
+        # `typ` lets `require_user` reject link tokens presented as bearer
         # creds, even though both are signed with the same key.
         "typ": "access",
+        # `jti` makes consecutive JWTs byte-distinguishable even when their
+        # other claims are identical (same `sub`/`typ`/second-resolution
+        # `iat`). Required for the slice-1 demo to assert rotation across
+        # the refresh boundary, and the foundation for any future
+        # server-side denylist (we do not enforce it today; `require_user`
+        # ignores the claim).
+        "jti": uuid.uuid4().hex,
     }
     header = {"alg": _JWT_ALG}
     encoded = jwt.encode(header, payload, settings.jwt_signing_key)

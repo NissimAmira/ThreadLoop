@@ -209,7 +209,10 @@ schema). Error statuses returned by these endpoints:
 - `400` malformed callback body (missing required field for provider).
 - `401` invalid/expired provider token, missing/expired/revoked/reused
   refresh token, or missing access token on `/api/me`.
-- `404` unknown provider in path.
+- `404` unknown provider in path; or auth subsystem disabled
+  (`AUTH_ENABLED=false`) — applies uniformly to every `/api/auth/*` route
+  AND `/api/me`, so a probe under flag-off can't tell the auth subsystem
+  exists. See `docs/auth.md` § Feature flag.
 - `503` provider JWKS unreachable; client retries.
 
 ### Listings

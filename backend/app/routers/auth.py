@@ -1,9 +1,8 @@
-"""Auth callback dispatcher.
+"""Auth callback dispatcher + session lifecycle routes.
 
-Wire format follows `POST /api/auth/{provider}/callback` in
-`shared/openapi.yaml`. The `google` branch shipped in #14, the `apple` branch
-shipped in #15, and the `facebook` branch shipped in #16 (this PR). All three
-plug into the same dispatcher.
+Wire format follows the auth section of `shared/openapi.yaml`. The provider
+callbacks (`google`/`apple`/`facebook`) shipped in #14/#15/#16. The session
+lifecycle routes — refresh, logout, /me — ship in #17 (slice 1 BE half).
 
 The whole router is gated behind `Settings.auth_enabled` per RFC 0001 §
 Rollout plan step 1: every route returns 404 while the flag is off so we can
@@ -12,17 +11,20 @@ land the implementation environment-by-environment.
 The 'find-or-create user' + 'detect cross-provider email collision' logic
 lives here; everything cryptographic / network-bound is in `app.auth.google`
 / `app.auth.apple` / `app.auth.facebook` (token verify), `app.auth.session`
-(mint + cookie), and `app.auth.link` (pending-link token).
+(mint + cookie), and `app.auth.link` (pending-link token). Bearer-JWT
+validation for protected routes lives in `app.auth.deps.require_user`.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session as DbSession
 
 from app.auth.apple import (
@@ -30,6 +32,7 @@ from app.auth.apple import (
     verify_apple_id_token,
 )
 from app.auth.apple import JwksUnavailableError as AppleJwksUnavailableError
+from app.auth.deps import require_auth_enabled
 from app.auth.facebook import (
     GraphApiUnavailableError,
     InvalidFacebookTokenError,
@@ -49,28 +52,26 @@ from app.auth.schemas import (
     Session,
     UserOut,
 )
-from app.auth.session import issue_session
+from app.auth.session import (
+    hash_refresh_token,
+    issue_session,
+    mint_access_token,
+    mint_refresh_token,
+    set_refresh_cookie,
+)
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import User
+from app.models import RefreshToken, User
 
 logger = logging.getLogger(__name__)
 
 
-def require_auth_enabled(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> None:
-    """Gate every route on this router. Returns 404 (not 503) when the flag
-    is off so an unauthenticated probe can't even tell the subsystem exists.
-
-    Attached as a router-level dependency rather than baked into each handler
-    so OpenAPI generation still describes the routes — `/docs` stays honest
-    about what the API surface will look like once the flag is flipped.
-    """
-    if not settings.auth_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-
-
+# `require_auth_enabled` lives in `app.auth.deps` so `app.routers.users` can
+# apply the same gate to `/api/me` without an inter-router import. Attaching
+# it as a router-level dependency (rather than baking the check into each
+# handler) keeps OpenAPI generation honest — `/docs` still describes the
+# routes, just with a 404 response code in the `auth_enabled=False` rollout
+# state.
 router = APIRouter(
     prefix="/auth",
     tags=["auth"],
@@ -230,6 +231,232 @@ def _handle_google_callback(
         expires_at=issued.access_token_expires_at,
         user=UserOut.model_validate(user),
     )
+
+
+# --- session lifecycle -------------------------------------------------------
+
+
+def _clear_refresh_cookie(response: Response, *, settings: Settings) -> None:
+    """Best-effort cookie clear with attributes matching `set_refresh_cookie`.
+
+    Browsers only clear a cookie when the unset call's attributes match the
+    cookie's original `Path`/`Domain`/`Secure`/`SameSite` — anything else
+    leaves a stranded cookie. Mirroring `set_refresh_cookie` keeps logout
+    actually effective in real browsers.
+    """
+    response.delete_cookie(
+        key=settings.refresh_cookie_name,
+        path="/",
+        domain=settings.refresh_cookie_domain,
+        secure=settings.refresh_cookie_secure,
+        samesite=cast(Literal["lax", "strict", "none"], settings.refresh_cookie_samesite),
+        httponly=True,
+    )
+
+
+def _refresh_failure_response(
+    *, code: str, message: str, settings: Settings, clear_cookie: bool
+) -> JSONResponse:
+    """Build a 401 JSONResponse for the refresh route, optionally clearing the
+    refresh cookie on the way out.
+
+    Why JSONResponse rather than `raise HTTPException`: raising the exception
+    short-circuits FastAPI's response-building, which means any cookies we
+    attached to the injected `Response` get discarded by the exception
+    handler. Returning a concrete response keeps the `Set-Cookie` clear
+    actually visible to the client.
+    """
+    payload = JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"detail": {"code": code, "message": message}},
+    )
+    if clear_cookie:
+        _clear_refresh_cookie(payload, settings=settings)
+    return payload
+
+
+_INVALID_REFRESH_MESSAGE = "Refresh token is missing, expired, revoked, or has been reused."
+
+
+@router.post(
+    "/refresh",
+    summary="Issue a new access token using the refresh cookie",
+    responses={
+        200: {"model": Session},
+        401: {"description": "Refresh token missing / invalid / revoked / reused."},
+    },
+)
+def refresh_session(
+    request: Request,
+    db: DbSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    """Rotate the refresh token and mint a fresh access JWT.
+
+    Failure mapping (all → 401, single envelope, no detail leaked):
+      - cookie missing
+      - hash doesn't match any row (forged / stale)
+      - row is expired
+      - row is revoked → **reuse-detection path**: revoke ALL of that user's
+        refresh tokens (likely token theft per RFC 0001 § Failure modes) and
+        return 401. The client must restart the SSO flow.
+
+    Success path:
+      - revoke the incoming row's `revoked_at`
+      - mint a fresh refresh token (new row, rewritten cookie)
+      - mint a new access JWT
+      - commit
+
+    Returns `JSONResponse` directly rather than via `raise HTTPException`
+    so the `Set-Cookie` clear / set headers actually reach the client —
+    raised exceptions discard the injected response object's headers.
+    """
+    cookie_value = request.cookies.get(settings.refresh_cookie_name)
+    if not cookie_value:
+        # No cookie to clear, no reason to attach Set-Cookie.
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "detail": {
+                    "code": "no_refresh_token",
+                    "message": "Missing refresh cookie.",
+                }
+            },
+        )
+
+    incoming_hash = hash_refresh_token(cookie_value, hmac_key=settings.refresh_token_hmac_key)
+    row = db.execute(
+        select(RefreshToken).where(RefreshToken.token_hash == incoming_hash)
+    ).scalar_one_or_none()
+
+    if row is None:
+        # Hash didn't match anything we issued. Could be stale / forged.
+        # Clear the bad cookie so the client doesn't keep replaying it.
+        # Log at INFO with a machine-greppable reason — no row exists, so
+        # there's no user_id to attach. Don't include the cookie value or
+        # its hash; both are client-controlled / sensitive.
+        logger.info("Refresh rejected: %s", "hash_not_found")
+        return _refresh_failure_response(
+            code="invalid_refresh_token",
+            message=_INVALID_REFRESH_MESSAGE,
+            settings=settings,
+            clear_cookie=True,
+        )
+
+    now = datetime.now(UTC)
+
+    if row.is_revoked():
+        # Reuse detection — RFC 0001 § Failure modes. The current token's row
+        # exists but was already rotated. Either a legitimate replay (e.g.
+        # browser back-button) or active token theft; we can't tell, so we
+        # treat it as theft and burn the user's whole refresh-token surface.
+        db.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == row.user_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+        db.commit()
+        # Enrich the WARNING with the row's age so ops can distinguish a
+        # benign back-button replay (small delta) from a stale token revived
+        # weeks later (large delta — real theft signal). Still no token
+        # contents / hash on the line.
+        logger.warning(
+            "Refresh-token reuse detected for user_id=%s issued_at=%s age=%ss; revoked all tokens",
+            row.user_id,
+            row.issued_at.isoformat(),
+            (now - row.issued_at).total_seconds(),
+        )
+        return _refresh_failure_response(
+            code="invalid_refresh_token",
+            message=_INVALID_REFRESH_MESSAGE,
+            settings=settings,
+            clear_cookie=True,
+        )
+
+    if row.is_expired(now):
+        # Past `expires_at`. Don't bother revoking — already inert. Still
+        # clear the client cookie so future requests don't carry the
+        # graveyard token. Log at INFO; user_id from the row is fine
+        # (server-side identifier, not client-controlled).
+        logger.info("Refresh rejected: %s user_id=%s", "token_expired", row.user_id)
+        return _refresh_failure_response(
+            code="invalid_refresh_token",
+            message=_INVALID_REFRESH_MESSAGE,
+            settings=settings,
+            clear_cookie=True,
+        )
+
+    # Happy path — valid, active row. Rotate.
+    user = db.get(User, row.user_id)
+    if user is None:
+        # User deleted between issuance and now. Shouldn't normally happen
+        # (CASCADE on user delete clears their tokens), but defend against
+        # races. Same 401 envelope; nothing to leak.
+        logger.info("Refresh rejected: %s user_id=%s", "user_not_found", row.user_id)
+        return _refresh_failure_response(
+            code="invalid_refresh_token",
+            message=_INVALID_REFRESH_MESSAGE,
+            settings=settings,
+            clear_cookie=True,
+        )
+
+    row.revoke(now)
+    new_plaintext, _new_row = mint_refresh_token(user, db=db, settings=settings, now=now)
+    access_token, access_expires_at = mint_access_token(user, settings=settings, now=now)
+    db.commit()
+    db.refresh(user)
+
+    success = Session(
+        link_required=False,
+        access_token=access_token,
+        expires_at=access_expires_at,
+        user=UserOut.model_validate(user),
+    )
+    response = JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=success.model_dump(mode="json", exclude_none=True),
+    )
+    set_refresh_cookie(response, new_plaintext, settings=settings)
+    return response
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke the current refresh token and clear the cookie",
+    response_class=Response,
+)
+def logout(
+    request: Request,
+    db: DbSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Revoke the refresh token associated with the current cookie. Idempotent.
+
+    Always returns 204 — a missing cookie, a hash that doesn't match any row,
+    or a row that's already revoked are all "the user is logged out" from the
+    server's perspective. We unconditionally clear the cookie attribute on
+    the returned response so subsequent requests stop carrying it.
+
+    Constructs the response directly rather than mutating the `Depends`-
+    injected one — the latter is not the response that actually ships to
+    the client when the route returns its own `Response`.
+    """
+    cookie_value = request.cookies.get(settings.refresh_cookie_name)
+    if cookie_value:
+        incoming_hash = hash_refresh_token(cookie_value, hmac_key=settings.refresh_token_hmac_key)
+        row = db.execute(
+            select(RefreshToken).where(RefreshToken.token_hash == incoming_hash)
+        ).scalar_one_or_none()
+        if row is not None and not row.is_revoked():
+            row.revoke()
+            db.commit()
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_refresh_cookie(response, settings=settings)
+    return response
 
 
 def _handle_facebook_callback(

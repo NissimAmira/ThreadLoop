@@ -15,15 +15,19 @@ ThreadLoop is **SSO-only**. There are no passwords stored anywhere.
 
 Per RFC 0001 § Rollout plan step 1, the entire auth subsystem ships behind a
 single boolean flag. While `AUTH_ENABLED=false` (the default), every
-`/api/auth/*` route returns 404 — the implementation is in the binary but
-unreachable. This lets us land each provider, the refresh / logout / `/me`
-work, and account-linking incrementally without exposing half-built flows.
+`/api/auth/*` route AND `/api/me` return 404 — the implementation is in the
+binary but unreachable. This lets us land each provider, the refresh /
+logout / `/me` work, and account-linking incrementally without exposing
+half-built flows.
 
 The flag is enforced as a router-level FastAPI dependency
-(`require_auth_enabled` in `app/routers/auth.py`), not by conditionally
-registering the router, so OpenAPI generation stays honest — the routes
-still appear in `/docs` and the contract doesn't lie about what the
-deployed binary will look like once the flag is flipped.
+(`require_auth_enabled`, exported from `app/auth/deps.py` and applied to
+both the auth router and the users router), not by conditionally
+registering routers, so OpenAPI generation stays honest — the routes still
+appear in `/docs` and the contract doesn't lie about what the deployed
+binary will look like once the flag is flipped. Both surfaces are gated
+identically: `/api/me` 404s under flag-off in lockstep with `/api/auth/*`
+so a probe can't tell the auth subsystem exists from the response.
 
 When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless all of
 `GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, `REFRESH_TOKEN_HMAC_KEY`,
@@ -122,13 +126,79 @@ CREATE INDEX ix_refresh_tokens_user_id ON refresh_tokens(user_id);
   inherited by #15 / #16 / #17.
 - **Rotation.** Every `/api/auth/refresh` revokes the row in use
   (`revoked_at = now()`) and inserts a fresh one. The cookie is rewritten.
+  Implementation (#17, slice 1): the route reads the `refresh_token` cookie,
+  HMAC-hashes it, looks up the row. On a happy match we set the existing
+  row's `revoked_at`, mint a fresh `(plaintext, row)` pair via
+  `mint_refresh_token`, set the new cookie, mint a new access JWT, and
+  commit the unit of work. Failures (no cookie / unknown hash / expired /
+  revoked / orphaned user) all 401 with the `invalid_refresh_token` code
+  and clear the cookie on the way out so a stale value doesn't keep
+  replaying.
 - **Reuse detection.** If a request arrives bearing a token whose row is
   already `revoked_at IS NOT NULL`, the route revokes **all** of that
-  `user_id`'s refresh tokens and returns `401`. This is the theft response
-  from RFC 0001 § Failure modes.
+  `user_id`'s refresh tokens (one `UPDATE ... WHERE revoked_at IS NULL`)
+  and returns `401`. This is the theft response from RFC 0001 § Failure
+  modes: we can't distinguish a benign replay (e.g. a stale tab) from
+  active token theft, so we burn the entire refresh-token surface and
+  force re-auth. Logged at WARNING level with `user_id`, the row's
+  `issued_at`, and the age delta — so ops can distinguish a benign
+  back-button replay (small delta) from a stale token revived weeks
+  later (large delta = real theft signal). Tested in
+  `test_refresh_route.py::test_refresh_with_revoked_token_triggers_reuse_detection`.
+- **Quiet failure paths log differentiated reasons.** The other three
+  401 paths (`hash_not_found`, `token_expired`, `user_not_found`) emit
+  `INFO` lines tagged with the reason so ops can grep them apart. The
+  log lines never carry the cookie value, the cookie's hash, or any
+  other client-controlled data — `user_id` is included only when the
+  row actually exists.
 - **Logout.** Revokes the current row only (`revoked_at = now()`).
+  Idempotent — a missing/unknown/already-revoked cookie still returns 204.
+  The Set-Cookie clear is unconditional. The route accepts no body.
 - **Cascade.** `ON DELETE CASCADE` on `user_id` — deleting a user (when the
   GDPR-deletion epic ships) removes their tokens automatically.
+
+### Bearer-JWT validation — `require_user`
+
+`app.auth.deps.require_user` is the FastAPI dependency every protected
+route uses to resolve the bearer access JWT into a `User` row. Single
+failure envelope (401 with the OpenAPI `Error` shape):
+
+```python
+from app.auth.deps import require_user
+
+@router.get("/me")
+def me(user: User = Depends(require_user)) -> UserOut: ...
+```
+
+Rejects (all → 401):
+
+- Missing `Authorization` header → `not_authenticated`.
+- Header present but not `Bearer <token>` → `invalid_authorization_scheme`.
+- JWT signature / expiry / structural failure → `invalid_token`. The dep
+  collapses authlib's various JoseError subtypes into one envelope so the
+  response doesn't leak which check failed.
+- `typ` claim missing or not `"access"` → `invalid_token`. The link
+  tokens (`typ=link`) are signed with the same `JWT_SIGNING_KEY` and
+  would otherwise pass JOSE verification; the `typ` discriminator keeps
+  them apart.
+- `sub` claim missing or not a UUID → `invalid_token`.
+- User row not found (account deleted between issue and use) →
+  `invalid_token`. Same envelope to avoid leaking "this user used to
+  exist" to a probe.
+
+**Access-token claims:** `sub` (user id), `iat`, `exp`, `typ=access`,
+and `jti` (a fresh `uuid4().hex` per mint). `jti` is included so two
+consecutive mints in the same wall-clock second produce byte-distinct
+JWTs — without it, deterministic HS256 over identical claims yields the
+same encoding and rotation across the refresh boundary becomes
+unobservable. `require_user` ignores the claim today; it's the
+foundation for any future server-side denylist (RFC 0001 § Risks
+explicitly defers a JWT denylist).
+
+**Role gates (`require_seller`/`require_buyer`) are NOT in this module.**
+They're deferred to issue #37 per the 2026-05-01 vertical-slicing pivot
+and ship with their first consumers in the listings/transactions epics.
+This keeps the dep surface honest about what's actually exercised.
 
 ## Account linking
 
@@ -367,12 +437,12 @@ re-authenticating.
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
 - Provider SDK integration (web + mobile)
-- `/api/auth/refresh` + `/api/auth/logout` + `/api/me` + session middleware (#17)
 - Account-linking *resolution* — `POST /api/auth/link` (#18). Detection is
   already wired into the Google and Apple callbacks; Facebook never trips
   the link path because Graph API doesn't expose `email_verified` (see
   Facebook specifics).
-- `require_buyer` / `require_seller` dependencies
+- `require_buyer` / `require_seller` dependencies (#37 — defer to listings
+  / transactions epics where the first consumers land)
 - Scheduled `client_secret` JWT rotation job (RFC 0001 § Risks).
 
 Already landed:
@@ -392,4 +462,13 @@ Already landed:
   `/debug_token` validation against `FACEBOOK_APP_ID` followed by `/me`
   for the profile, and the design choice to treat every Facebook email as
   unverified (so the cross-provider collision check never fires for
-  Facebook) (#16, this PR).
+  Facebook) (#16).
+- **Slice-1 BE half** (#17): `POST /api/auth/refresh` (rotation +
+  reuse-detection), `POST /api/auth/logout` (idempotent), `GET /api/me`,
+  and `app.auth.deps.require_user`. With this PR + the slice-1 FE half
+  (#19) merged and `AUTH_ENABLED=true` set, the demo "click Google →
+  see your name on /me → page refresh keeps the session → logout"
+  works end-to-end. Apple `_ClientSecretCache` cache-key fix (item #1
+  from #34) bundled in: cache now keys on
+  `(team_id, client_id, key_id, hash(private_key_pem))` so a manual
+  rotation no longer serves a stale-but-still-young JWT.

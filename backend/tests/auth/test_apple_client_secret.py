@@ -10,6 +10,7 @@ reuse it without reaching into private state.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 from authlib.jose import JsonWebKey, jwt
@@ -207,3 +208,190 @@ def test_signed_jwt_verifies_against_pem(apple_p8_pem: str) -> None:
     pub = JsonWebKey.import_key(apple_p8_pem)
     claims = jwt.decode(encoded, pub)
     claims.validate()  # no-op for an unexpired JWT, but exercises the path.
+
+
+# ----- cache-key correctness (#34 item #1) ----------------------------------
+
+
+def test_cache_invalidates_when_team_id_changes(apple_p8_pem: str) -> None:
+    """Bug #34 item #1 regression: changing `team_id` mid-process must
+    resign a fresh JWT instead of returning the cached one signed against
+    the previous team. Before the fix the cache only checked age."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    # Same `now`, same key, same client_id, same key_id — only team_id
+    # changes. The previous behaviour returned `first` unchanged. The
+    # post-fix behaviour signs a fresh JWT whose `iss` claim is the new
+    # team.
+    second = get_client_secret(
+        team_id="OTHERTEAM2",
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    assert first != second, "rotated team_id must force a fresh JWT"
+
+    pub = JsonWebKey.import_key(apple_p8_pem)
+    first_claims = jwt.decode(first, pub)
+    second_claims = jwt.decode(second, pub)
+    assert first_claims["iss"] == TEAM_ID
+    assert second_claims["iss"] == "OTHERTEAM2"
+
+
+def test_cache_invalidates_when_private_key_pem_changes(
+    apple_p8_pem: str,
+) -> None:
+    """Bug #34 item #1 regression: rotating the `.p8` PEM mid-process must
+    resign with the new key, not keep serving a JWT signed against the
+    previous one (which Apple would reject at the token endpoint)."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    other_key = JsonWebKey.generate_key("EC", "P-256", is_private=True)
+    other_pem = other_key.as_pem(is_private=True).decode("ascii")
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    second = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=other_pem,
+        cache=cache,
+        now=base,
+    )
+    assert first != second, "rotated PEM must force a fresh JWT"
+
+    # `first` verifies against the original key only; `second` verifies
+    # against the rotated key only. If the cache had returned the stale
+    # `first` for the second call, `second` would still verify against the
+    # original key — the assertion below would fail.
+    pub_orig = JsonWebKey.import_key(apple_p8_pem)
+    pub_other = JsonWebKey.import_key(other_pem)
+    jwt.decode(first, pub_orig)
+    jwt.decode(second, pub_other)
+    with pytest.raises(Exception):  # noqa: B017 - authlib raises various subtypes
+        jwt.decode(second, pub_orig)
+
+
+def test_cache_invalidates_when_client_id_changes(apple_p8_pem: str) -> None:
+    """Symmetry with `team_id` / PEM rotation: rotating the Service ID
+    (`client_id`, the JWT's `sub`) must resign rather than serve the cached
+    JWT. A stale `sub` claim would cause Apple to reject the token at the
+    `/auth/token` endpoint — symptom looks identical to the pre-fix
+    `team_id` regression."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    second = get_client_secret(
+        team_id=TEAM_ID,
+        client_id="com.threadloop.test.OTHERSERVICE",
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    assert first != second, "rotated client_id must force a fresh JWT"
+
+    pub = JsonWebKey.import_key(apple_p8_pem)
+    first_claims = jwt.decode(first, pub)
+    second_claims = jwt.decode(second, pub)
+    assert first_claims["sub"] == CLIENT_ID
+    assert second_claims["sub"] == "com.threadloop.test.OTHERSERVICE"
+
+
+def test_cache_invalidates_when_key_id_changes(apple_p8_pem: str) -> None:
+    """Symmetry: rotating the `kid` header (Apple's key identifier) must
+    resign. `kid` is what Apple uses to look up which public key to verify
+    the JWT's signature with — a stale `kid` paired with a freshly-uploaded
+    private key in the developer portal would fail verification at Apple's
+    token endpoint."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    second = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id="OTHERKID0002",
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    assert first != second, "rotated key_id must force a fresh JWT"
+
+    # `kid` lives in the JWT header, not the payload. Decode the header
+    # segment directly (same trick used in `test_sign_jwt_has_required_claims`).
+    import base64
+    import json as _json
+
+    def _header(encoded: str) -> dict[str, object]:
+        seg = encoded.split(".")[0]
+        padding = "=" * (-len(seg) % 4)
+        return cast(
+            dict[str, object],
+            _json.loads(base64.urlsafe_b64decode(seg + padding).decode("ascii")),
+        )
+
+    assert _header(first)["kid"] == KEY_ID
+    assert _header(second)["kid"] == "OTHERKID0002"
+
+
+def test_cache_keeps_serving_unchanged_inputs_within_ttl(
+    apple_p8_pem: str,
+) -> None:
+    """Sanity check the cache-key fix didn't accidentally turn the cache
+    into a no-op: with all four inputs identical and within the TTL, the
+    cached JWT is still returned."""
+    cache = _ClientSecretCache()
+    base = datetime(2026, 4, 30, 12, 0, 0, tzinfo=UTC)
+
+    first = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base,
+    )
+    second = get_client_secret(
+        team_id=TEAM_ID,
+        client_id=CLIENT_ID,
+        key_id=KEY_ID,
+        private_key_pem=apple_p8_pem,
+        cache=cache,
+        now=base + timedelta(minutes=10),
+    )
+    assert first == second
