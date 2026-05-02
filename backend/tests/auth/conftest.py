@@ -39,7 +39,9 @@ def google_jwks_pair() -> GoogleJwksPair:
     private_dict.setdefault("alg", "RS256")
     private_dict.setdefault("use", "sig")
 
-    public_dict = {k: v for k, v in private_dict.items() if k not in ("d", "p", "q", "dp", "dq", "qi")}
+    public_dict = {
+        k: v for k, v in private_dict.items() if k not in ("d", "p", "q", "dp", "dq", "qi")
+    }
     public_dict["kid"] = private_dict["kid"]
     public_dict["alg"] = "RS256"
     public_dict["use"] = "sig"

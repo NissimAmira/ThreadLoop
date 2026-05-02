@@ -228,39 +228,58 @@ def test_refresh_without_cookie_returns_401(auth_client: TestClient) -> None:
 
 
 def test_refresh_with_unknown_token_returns_401_and_clears_cookie(
-    auth_client: TestClient, pg_url: str
+    auth_client: TestClient, pg_url: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A token that hashes to nothing in the table → 401 + cookie cleared.
 
     The cookie clear keeps the client from replaying the bad value forever.
     """
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO, logger="app.routers.auth")
     resp = auth_client.post("/api/auth/refresh", cookies={"refresh_token": "totally-fabricated"})
     assert resp.status_code == 401
     assert resp.json()["detail"]["code"] == "invalid_refresh_token"
     # The Set-Cookie unset should be present on the response.
     set_cookie = resp.headers.get("set-cookie", "")
     assert "refresh_token=" in set_cookie
+    # Pin the differentiated log line so a regression that swallows the
+    # reason (or accidentally leaks token contents) is caught.
+    assert any("hash_not_found" in record.getMessage() for record in caplog.records)
 
 
-def test_refresh_with_expired_token_returns_401(auth_client: TestClient, pg_url: str) -> None:
+def test_refresh_with_expired_token_returns_401(
+    auth_client: TestClient, pg_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging as _logging
+
     plaintext = "expired-refresh-token"
     _seed_user_and_token(
         pg_url,
         plaintext=plaintext,
         expires_at=datetime.now(UTC) - timedelta(seconds=10),
     )
-    resp = auth_client.post("/api/auth/refresh", cookies={"refresh_token": plaintext})
+    with caplog.at_level(_logging.INFO, logger="app.routers.auth"):
+        resp = auth_client.post("/api/auth/refresh", cookies={"refresh_token": plaintext})
     assert resp.status_code == 401
     assert resp.json()["detail"]["code"] == "invalid_refresh_token"
+    # The `clear_cookie=True` branch in the production code is load-bearing —
+    # a regression that flipped it would silently let clients keep replaying
+    # the dead token. Pin it via the Set-Cookie header.
+    assert "refresh_token=" in resp.headers.get("set-cookie", "")
+    # Differentiated INFO log so ops can grep "token_expired".
+    assert any("token_expired" in record.getMessage() for record in caplog.records)
 
 
 def test_refresh_with_revoked_token_triggers_reuse_detection(
-    auth_client: TestClient, pg_url: str
+    auth_client: TestClient, pg_url: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Reuse detection (RFC 0001 § Failure modes): an already-revoked token
     presented again means either a benign replay OR active token theft. We
     can't distinguish, so we revoke ALL of that user's refresh tokens and
     return 401. The user must re-authenticate from scratch."""
+    import logging as _logging
+
     revoked_plaintext = "previously-rotated"
     user_id = _seed_user_and_token(
         pg_url,
@@ -292,10 +311,26 @@ def test_refresh_with_revoked_token_triggers_reuse_detection(
                 },
             )
 
-        resp = auth_client.post("/api/auth/refresh", cookies={"refresh_token": revoked_plaintext})
+        with caplog.at_level(_logging.WARNING, logger="app.routers.auth"):
+            resp = auth_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": revoked_plaintext}
+            )
 
         assert resp.status_code == 401
         assert resp.json()["detail"]["code"] == "invalid_refresh_token"
+        # Reuse detection MUST clear the refresh cookie. Without this clear,
+        # a victim's browser would keep replaying the now-revoked token
+        # forever — load-bearing for client correctness, so pin it
+        # explicitly. Most important Set-Cookie assertion of the bunch.
+        assert "refresh_token=" in resp.headers.get("set-cookie", "")
+        # Enriched WARNING carries user_id, issued_at, and age — pin all
+        # three so a regression that drops any of them surfaces here.
+        warning_messages = [
+            record.getMessage() for record in caplog.records if record.levelno == _logging.WARNING
+        ]
+        assert any("Refresh-token reuse detected" in m for m in warning_messages)
+        assert any(f"user_id={user_id}" in m for m in warning_messages)
+        assert any("issued_at=" in m and "age=" in m for m in warning_messages)
 
         # All of this user's tokens must be revoked now — including the
         # token that was active before reuse was detected.
@@ -311,6 +346,99 @@ def test_refresh_with_revoked_token_triggers_reuse_detection(
         )
     finally:
         engine.dispose()
+
+
+def test_refresh_with_orphaned_user_returns_401_and_clears_cookie(
+    auth_client: TestClient, pg_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A refresh-token row whose `user_id` no longer matches a live `users`
+    row → 401 + cookie cleared.
+
+    `users` has ON DELETE CASCADE on `refresh_tokens.user_id` so the orphan
+    state shouldn't normally occur, but the production code defends against
+    a race-window between issuing the token and the user row disappearing.
+    Mirror that defence in tests so a regression that drops the cookie
+    clear (or the 401) doesn't slip through.
+    """
+    import logging as _logging
+
+    plaintext = "ghost-user-refresh-token"
+    user_id = _seed_user_and_token(pg_url, plaintext=plaintext)
+
+    # Drop the user row directly; the FK is configured ON DELETE CASCADE,
+    # so deleting the user normally wipes their refresh tokens too. We
+    # disable the constraint for this single test so the orphan state can
+    # actually exist on the wire — that's the race the production code
+    # guards against.
+    engine = create_engine(pg_url, future=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE refresh_tokens DROP CONSTRAINT refresh_tokens_user_id_fkey")
+            )
+            conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+        try:
+            with caplog.at_level(_logging.INFO, logger="app.routers.auth"):
+                resp = auth_client.post(
+                    "/api/auth/refresh",
+                    cookies={"refresh_token": plaintext},
+                )
+        finally:
+            # Clear the orphaned `refresh_tokens` row before re-adding the
+            # FK; otherwise PG refuses to validate the constraint. Then
+            # restore the FK so subsequent tests start from a clean schema.
+            with engine.begin() as conn:
+                conn.execute(
+                    text("DELETE FROM refresh_tokens WHERE user_id = :uid"),
+                    {"uid": user_id},
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE refresh_tokens "
+                        "ADD CONSTRAINT refresh_tokens_user_id_fkey "
+                        "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+                    )
+                )
+    finally:
+        engine.dispose()
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "invalid_refresh_token"
+    # Cookie clear is load-bearing — the client must stop replaying.
+    assert "refresh_token=" in resp.headers.get("set-cookie", "")
+    # Differentiated INFO log so ops can grep "user_not_found".
+    assert any("user_not_found" in record.getMessage() for record in caplog.records)
+
+
+def test_refresh_when_auth_disabled_returns_404(auth_client: TestClient, pg_url: str) -> None:
+    """RFC 0001 § Rollout plan step 1 mirror for the lifecycle routes. Pinned
+    here so a future refactor that relocates the gate to per-router doesn't
+    silently leave `/api/auth/refresh` returning 401 (which leaks subsystem
+    presence) under flag-off.
+
+    Captures and restores the prior `get_settings` override rather than
+    clearing it, so this test composes with whatever the surrounding fixture
+    set up (recommended pattern from the #34 item #2 follow-up).
+    """
+    plaintext = "ought-not-to-be-checked"
+    _seed_user_and_token(pg_url, plaintext=plaintext)
+    prior = app.dependency_overrides.get(get_settings)
+    app.dependency_overrides[get_settings] = lambda: make_test_settings(
+        auth_enabled=False,
+        database_url=pg_url,
+        refresh_cookie_secure=False,
+    )
+    try:
+        resp = auth_client.post(
+            "/api/auth/refresh",
+            cookies={"refresh_token": plaintext},
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prior
+    assert resp.status_code == 404
 
 
 def test_refresh_with_expired_access_jwt_succeeds_via_refresh_cookie(
