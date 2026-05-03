@@ -38,62 +38,120 @@ will be the first real feature driven through the multi-agent cycle.
 
 ## How the dev cycle works
 
-ThreadLoop simulates a real product team's role separation through six
+ThreadLoop simulates a real product team's role separation through eight
 specialized Claude Code subagents in [`.claude/agents/`](./.claude/agents).
 Each agent has a role-specific system prompt, a tool allow-list, and runs in
 its own context window so phase artifacts don't pollute each other.
 
 ```
-            IDEA / problem statement
-                       │
-                  invoke pm
-                       │
-        docs/rfcs/NNNN.md + Epic issue
-            (user stories, AC, open Qs)
-                       │
-            (human reviews / approves)
-                       │
-               invoke tech-lead
-                       │
-       sub-issues under the Epic, by area
-       [BE] / [FE-Web] / [FE-Mobile]
-       [Test] / [Infra] / [Docs]
-       (each with concrete AC, deps, risks)
-                       │
-        ┌──────────┬───┴────┬──────────┐
-        ▼          ▼        ▼          ▼
-   backend-dev  web-dev  mobile-dev  ...
-     PR #X       PR #Y    PR #Z
-        │          │        │
-        └──────────┴───┬────┘
-                       ▼
-                  invoke cr
-       (rubric + linked-task AC validation)
-                       │
-                    merge → ship
-                       │
-            release-please cuts vN.M.K
+                  IDEA / problem statement
+                             │
+                        invoke pm
+                             │
+              docs/rfcs/NNNN.md + Epic issue
+                  (user stories, AC, open Qs)
+                             │
+                ┌────────────┴────────────┐
+                ▼                         ▼
+          invoke biz-dev          invoke ux-designer
+        (ROI + funnel +          (flow sketch + a11y +
+         market research)         AR ≤3 clicks rule)
+                │                         │
+                └────────────┬────────────┘
+                             ▼
+              advisory comments on Epic
+              (pm revises or human overrides;
+               unresolved must_fix advisories
+               block tech-lead breakdown)
+                             │
+                     invoke tech-lead
+                             │
+             sub-issues under the Epic, by area
+             [BE] / [FE-Web] / [FE-Mobile]
+             [Test] / [Infra] / [Docs]
+             (each with concrete AC, deps, risks)
+                             │
+                ┌────────────┴────────────┐
+                ▼                         ▼
+          invoke biz-dev          invoke ux-designer
+        (cost-vs-value of         (flow sketch on FE
+         each slice; slice 1       tasks before code;
+         must unlock a demo)       call out friction)
+                │                         │
+                └────────────┬────────────┘
+                             ▼
+              advisory comments on tasks
+              (tech-lead revises or escalates;
+               dev agents read these before
+               opening a branch)
+                             │
+         ┌──────────┬────────┴────────┬──────────┐
+         ▼          ▼                 ▼          ▼
+    backend-dev  web-dev         mobile-dev    ...
+      PR #X       PR #Y            PR #Z
+         │          │                 │
+         │          └────────┬────────┘
+         │                   ▼
+         │            invoke ux-designer
+         │            (FE PR UI review)
+         │                   │
+         └──────────┬────────┘
+                    ▼
+                invoke cr
+   (rubric + linked-task AC validation +
+    surfaces unaddressed biz-dev / ux-designer
+    pushback as must_fix)
+                    │
+                 merge → ship
+                    │
+         release-please cuts vN.M.K
 ```
 
 The main Claude Code session orchestrates: you say *"have the pm agent
-design SSO sign-in"*, then *"have the tech-lead break down epic #N"*, then
-*"have backend-dev implement task #N+2"*, then *"have the cr agent review
-the current changes"*. Each subagent reads `CLAUDE.md` + `docs/contributing.md`
-fresh on every invocation.
+design SSO sign-in"*, then *"have biz-dev review epic #N"*, then *"have
+ux-designer review epic #N"*, then *"have the tech-lead break down epic #N"*,
+then *"have ux-designer review the FE tasks for #N"*, then *"have web-dev
+implement task #N+3"*, then *"have the cr agent review the current changes"*.
+Each subagent reads `CLAUDE.md` + `docs/contributing.md` fresh on every
+invocation.
 
 | Subagent | Role | Inputs | Outputs |
 |---|---|---|---|
 | [`pm`](./.claude/agents/pm.md) | Product manager | Feature idea / problem statement | RFC in `docs/rfcs/` + Epic GitHub issue (user stories, AC, open questions) |
+| [`biz-dev`](./.claude/agents/biz-dev.md) | Biz-dev / strategy advisor | Epic, tech-lead breakdown, or in-flight PR | Advisory comment: ROI, funnel impact, market context, scope-creep flags |
+| [`ux-designer`](./.claude/agents/ux-designer.md) | UX/UI designer | Epic, FE task AC, or FE PR | Advisory comment: flow sketch, friction & a11y issues, AR-3-clicks check |
 | [`tech-lead`](./.claude/agents/tech-lead.md) | Tech lead | An approved Epic | Sub-issues under the Epic by area, with per-task AC, deps, risks; ADRs for architectural choices |
 | [`backend-dev`](./.claude/agents/backend-dev.md) | Backend engineer | A `[BE]` task | Branch + PR (FastAPI / SQLAlchemy / Alembic) |
 | [`web-dev`](./.claude/agents/web-dev.md) | Web engineer | A `[FE-Web]` task | Branch + PR (Vite / React / TS / Tailwind) |
 | [`mobile-dev`](./.claude/agents/mobile-dev.md) | Mobile engineer | A `[FE-Mobile]` task | Branch + PR (Expo / RN / TS) |
-| [`cr`](./.claude/agents/cr.md) | Code reviewer | An open PR | Findings against rubric + AC validation against the linked task |
+| [`cr`](./.claude/agents/cr.md) | Code reviewer | An open PR | Findings against rubric + AC validation + unaddressed advisory pushback |
+
+### How agents push back on each other
+
+Like a real dev team, every agent is expected to **push back when an
+upstream artifact violates a load-bearing rule** — not just rubber-stamp
+the previous step. Pushback is concrete, citable, and resolvable:
+
+- It cites the specific rule, doc, AC text, or contract field that's
+  being violated. Vibes-only objections aren't pushback.
+- It proposes a resolution path: revise the upstream artifact, escalate
+  to the human, or accept-with-justification.
+- It's posted on the relevant GitHub issue/PR (so it's durable across
+  agent invocations) and summarised in the chat output.
+- The downstream agent **does not silently work around it** — they
+  either wait for resolution or note in their own output that they
+  proceeded over an unresolved pushback.
+
+The `cr` agent enforces this loop: when it reviews a PR, it scans the
+linked task and parent Epic for `[biz-dev pushback]` and
+`[ux-designer pushback]` comments and surfaces unaddressed ones as
+`must_fix`. Each agent's `## Push back when…` section in its own md file
+lists the concrete triggers — read those for the canonical list.
 
 **Keeping the cycle in sync** is part of the docs-as-part-of-done policy.
 When you change a convention, schema constraint, or process rule, update the
 relevant agent rubric in the same PR — agents are not auto-synced. The
-`[`cr`](./.claude/agents/cr.md)` agent enforces this by flagging missing
+[`cr`](./.claude/agents/cr.md) agent enforces this by flagging missing
 agent updates.
 
 ## Workspaces
@@ -120,7 +178,7 @@ agent updates.
 - [`docs/assets.md`](./docs/assets.md) — image and AR/.glb pipelines.
 - [`.github/branch-protection.md`](./.github/branch-protection.md) — branch ruleset + why 0 approvals.
 - [`.github/release-please-app-setup.md`](./.github/release-please-app-setup.md) — release-please GitHub App setup (why and how).
-- [`.claude/agents/`](./.claude/agents/) — six dev-cycle subagents (`pm`, `tech-lead`, `backend-dev`, `web-dev`, `mobile-dev`, `cr`). See "How the dev cycle works" above.
+- [`.claude/agents/`](./.claude/agents/) — eight dev-cycle subagents (`pm`, `biz-dev`, `ux-designer`, `tech-lead`, `backend-dev`, `web-dev`, `mobile-dev`, `cr`). See "How the dev cycle works" above.
 - [`docs/devops-roadmap.md`](./docs/devops-roadmap.md) — phased deployment/observability/orchestration plan with explicit triggers. **Scan it at session start** if any topic in the conversation touches deployment, infrastructure, performance, or observability — proactively prompt the user when a trigger has fired.
 - [`docs/rfcs/`](./docs/rfcs/) — design proposals for non-trivial product/architectural changes. Numbered, append-only.
 - [`docs/adrs/`](./docs/adrs/) — Architecture Decision Records. Short, focused "we decided X because Y" entries.

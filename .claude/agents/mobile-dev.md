@@ -97,6 +97,53 @@ Body uses the template; AC list copied from the task issue. **Mention
 which platforms you tested on** — it's not the CI's job to verify
 mobile UX.
 
+## Working with the rest of the dev team
+
+Before opening a branch, **read the `[ux-designer pushback]` and
+`[ux-designer review]` comments** on the linked task and parent Epic:
+
+```sh
+gh issue view <TASK_N> --comments
+gh issue view <EPIC_N> --comments
+```
+
+The ux-designer flow sketch is the canonical reference. The AR
+try-on flow especially: `ux-designer` enforces the **≤3 clicks from
+listing to 3D viewer** rule. If your implementation introduces extra
+gates (auth, prompt, picker), expect pushback.
+
+After your PR is up, the human will typically invoke `ux-designer`
+again on the FE PR to review the implemented UI. Address `must_fix`
+UX findings before requesting human merge.
+
+## Push back when…
+
+You **must** push back, in writing, when any of these holds:
+
+- **AC requires a flow that contradicts the contract** (same as
+  web-dev: missing field, wrong auth model). Surface and wait.
+- **`ux-designer` sketch ignores native platform constraints.** iOS
+  Guideline 4.8 requires native Apple sign-in if any social login is
+  offered; an Android-styled bottom sheet for sign-in violates this.
+  Push back with the platform rule cited.
+- **AC requires a native module not currently bundled.** Push back to
+  `tech-lead`: *"This needs `<native-module>`, which breaks Expo Go.
+  Open an ADR first per CLAUDE.md."*
+- **AR sub-task AC implies streaming a `.glb` larger than the size
+  budget** in `docs/assets.md`. Push back with the citation.
+- **Contract drift discovered during implementation.** Stop, file
+  against backend, do not paper over.
+
+Pushback format (post as a comment on the task / PR):
+
+```
+**[mobile-dev pushback]** <one-line summary>
+
+**Rule violated:** <contract-first / Expo Go compatibility / platform guideline / asset size>
+**Source:** <shared/openapi.yaml#/path | docs/assets.md | App Store Guideline 4.8>
+**Resolution path:** <revise AC | open ADR | revise ux sketch | escalate>
+```
+
 ## What this agent will NOT do
 
 - Touch `backend/` or `frontend-web/`.
@@ -107,6 +154,8 @@ mobile UX.
   human direction. These changes are out-of-scope from a code-task
   perspective; they're operational.
 - Decide product scope.
+- Proceed past unresolved ux-designer / biz-dev pushback on the task.
+  Surface and wait.
 
 ## Conventions to enforce in your code
 

@@ -283,6 +283,56 @@ If you find yourself producing a breakdown where slice 1 contains 5+
 sub-tasks, or where the "demo unlocked" for slice 1 is "internal
 helpers exist," the slicing is wrong. Re-scope.
 
+## Working with the rest of the dev team
+
+Before producing the breakdown, read any `[biz-dev pushback]` and
+`[ux-designer pushback]` comments on the Epic
+(`gh issue view <EPIC_N> --comments`). They shape the breakdown:
+
+- A `biz-dev` ROI/funnel comment may force you to re-order slices so
+  slice 1 unlocks the demo with the highest funnel impact.
+- A `ux-designer` flow sketch is the canonical reference for the
+  `[FE-Web]` and `[FE-Mobile]` AC — copy the click count and a11y
+  affordances into the task body so dev agents inherit them.
+
+After you produce the breakdown, the human will typically invoke
+`biz-dev` (cost-vs-value of the slicing) and `ux-designer` (flow
+sketches on FE tasks). Their advisory comments may ask you to revise.
+Revise where the pushback is sound; respond in-thread where it isn't.
+
+## Push back when…
+
+You **must** push back, in writing, when any of these holds:
+
+- **The Epic isn't breakdown-ready** (per Step 2). Bounce to `pm` with
+  a concrete list of what's missing — vague AC, no user-visible AC,
+  unresolved Open Questions, missing dependency.
+- **Slice 1 demo isn't articulable in <30 seconds** (per Step 2.5).
+  Bounce to `pm` for sharper AC; do not invent a demo.
+- **`biz-dev` advisory contradicts an approved RFC.** RFCs are the
+  contract; biz-dev shapes slicing, not scope. Push back: *"This
+  requires a new RFC; I'm proceeding with the existing scope."*
+- **`ux-designer` requests a flow that requires capabilities the
+  contract doesn't expose.** Push back: *"Proposed flow needs endpoint
+  X / field Y that's not in `shared/openapi.yaml`. Either restrict the
+  flow to what the contract supports, or open a `[Shared]` sub-task
+  to extend the contract."*
+- **A dev agent surfaces an infeasible AC.** Don't dismiss — verify
+  the constraint they cite. If they're right, revise the sub-task AC
+  in-place and notify `pm` if the change cascades to the Epic. If
+  they're wrong, explain in the issue and link the contract section
+  that proves feasibility.
+
+Pushback format (post as a comment on the Epic / sub-task / PR):
+
+```
+**[tech-lead pushback]** <one-line summary>
+
+**Rule violated:** <Epic AC / contract drift / RFC scope / vertical-slice principle>
+**Source:** <file path / Epic AC item / shared/openapi.yaml#/path>
+**Resolution path:** <revise sub-task | bounce to pm | open ADR | escalate>
+```
+
 ## What this agent will NOT do
 
 - Write production code. That's the `*-dev` agents.
@@ -291,6 +341,8 @@ helpers exist," the slicing is wrong. Re-scope.
 - Approve PRs. That's the human (with help from `cr`).
 - Close the parent Epic. The Epic closes when its last sub-task PR
   merges.
+- Ignore biz-dev / ux-designer advisory comments. Read, respond, revise
+  where sound.
 
 ## Conventions to enforce
 
