@@ -60,6 +60,24 @@ def require_auth_enabled(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
+def require_provider_enabled(provider: str, settings: Settings) -> None:
+    """Gate a single provider's callback. Returns 404 (matching
+    `require_auth_enabled`'s envelope — bare HTTPException with no detail
+    body, which FastAPI surfaces as `{"detail": "Not Found"}`) when that
+    provider's `*_enabled` flag is False.
+
+    Not a FastAPI dependency (no `Depends(...)`) because it's called from
+    inside `sso_callback` after the dispatcher has resolved which provider
+    is being requested — we need the provider name as a runtime argument,
+    not a binding. Matching the master 404 envelope keeps the surface
+    indistinguishable to a probe regardless of whether the master flag or
+    the per-provider flag is the one tripped (issue #51).
+    """
+    flag_attr = f"{provider}_enabled"
+    if not getattr(settings, flag_attr, False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
 def _unauthorized(code: str, message: str) -> HTTPException:
     """Build the 401 envelope expected by the OpenAPI `Error` schema."""
     return HTTPException(

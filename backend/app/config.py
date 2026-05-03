@@ -26,6 +26,19 @@ class Settings(BaseSettings):
     # step 5; flipped in staging earlier per step 3.
     auth_enabled: bool = False
 
+    # Per-provider enablement flags. Mirror Epic #11's slice-by-slice rollout:
+    # slice 1 ships Google end-to-end, slice 2 broadens to Apple, slice 3 to
+    # Facebook. Each provider's secrets are required only when its own flag is
+    # True (see `_require_auth_secrets_when_enabled`), and each provider's
+    # callback returns 404 when its flag is False (matching the master
+    # `auth_enabled` 404 path). This lets a slice-1 demo boot with only
+    # `AUTH_ENABLED=true` and `GOOGLE_ENABLED=true` set, without forcing
+    # dummy Apple/FB values into `.env` — the validator's loud-fail behaviour
+    # for the providers the operator IS enabling is preserved per-provider.
+    google_enabled: bool = False
+    apple_enabled: bool = False
+    facebook_enabled: bool = False
+
     # HS256 signing key for access JWTs and link tokens. Must be set to a
     # cryptographically random value in any non-dev environment; the default
     # value is deliberately obviously-fake so misconfigured deploys fail loudly.
@@ -79,39 +92,56 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_auth_secrets_when_enabled(self) -> "Settings":
-        """When `auth_enabled=True`, refuse to boot with empty auth secrets.
+        """When `auth_enabled=True`, refuse to boot with empty auth secrets
+        for the providers the operator is actually enabling.
 
         An unset `google_client_id` would silently make every Google sign-in
         look like "your token is invalid" (401) when the real fault is server
         misconfiguration. Same for the JWT and refresh-HMAC keys: a missing
         secret would mean signed-with-the-empty-string. Fail loudly at
         `Settings()` construction instead.
+
+        Gating per-provider rather than globally: previously this validator
+        demanded all three providers' secrets whenever the master flag was
+        True, which forced operators running a Google-only slice 1 demo to
+        stuff dummy values into Apple/Facebook env vars just to boot — at
+        which point the validator no longer caught the misconfiguration it
+        was designed to. The per-provider `*_enabled` flags scope the
+        loud-fail to the providers actually being shipped (issue #51,
+        Epic #11). The cross-cutting `JWT_SIGNING_KEY` and
+        `REFRESH_TOKEN_HMAC_KEY` are still required whenever `auth_enabled`
+        is True, since every provider's session helpers reach for them.
         """
         if self.auth_enabled:
             missing: list[str] = []
-            if not self.google_client_id:
-                missing.append("GOOGLE_CLIENT_ID")
+            # Cross-cutting secrets — required whenever the auth subsystem is
+            # on at all, regardless of which providers are enabled.
             if not self.jwt_signing_key:
                 missing.append("JWT_SIGNING_KEY")
             if not self.refresh_token_hmac_key:
                 missing.append("REFRESH_TOKEN_HMAC_KEY")
-            if not self.apple_client_id:
-                missing.append("APPLE_CLIENT_ID")
-            if not self.apple_team_id:
-                missing.append("APPLE_TEAM_ID")
-            if not self.apple_key_id:
-                missing.append("APPLE_KEY_ID")
-            if not self.apple_private_key:
-                missing.append("APPLE_PRIVATE_KEY")
+            if self.google_enabled and not self.google_client_id:
+                missing.append("GOOGLE_CLIENT_ID")
+            if self.apple_enabled:
+                if not self.apple_client_id:
+                    missing.append("APPLE_CLIENT_ID")
+                if not self.apple_team_id:
+                    missing.append("APPLE_TEAM_ID")
+                if not self.apple_key_id:
+                    missing.append("APPLE_KEY_ID")
+                if not self.apple_private_key:
+                    missing.append("APPLE_PRIVATE_KEY")
             # Facebook: both APP_ID (used as the audience-equivalent during
             # `/debug_token` validation) and APP_SECRET (used to construct the
-            # app access token, `{APP_ID}|{APP_SECRET}`) are required. Without
-            # the secret, every Facebook sign-in would silently 401 at
-            # /debug_token rather than telling the operator the real cause.
-            if not self.facebook_app_id:
-                missing.append("FACEBOOK_APP_ID")
-            if not self.facebook_app_secret:
-                missing.append("FACEBOOK_APP_SECRET")
+            # app access token, `{APP_ID}|{APP_SECRET}`) are required when
+            # Facebook is enabled. Without the secret, every Facebook sign-in
+            # would silently 401 at /debug_token rather than telling the
+            # operator the real cause.
+            if self.facebook_enabled:
+                if not self.facebook_app_id:
+                    missing.append("FACEBOOK_APP_ID")
+                if not self.facebook_app_secret:
+                    missing.append("FACEBOOK_APP_SECRET")
             if missing:
                 raise ValueError(
                     "AUTH_ENABLED=true but the following auth secrets are unset: "

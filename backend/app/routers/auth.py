@@ -32,7 +32,7 @@ from app.auth.apple import (
     verify_apple_id_token,
 )
 from app.auth.apple import JwksUnavailableError as AppleJwksUnavailableError
-from app.auth.deps import require_auth_enabled
+from app.auth.deps import require_auth_enabled, require_provider_enabled
 from app.auth.facebook import (
     GraphApiUnavailableError,
     InvalidFacebookTokenError,
@@ -113,6 +113,14 @@ def sso_callback(
             f"Unknown auth provider {provider!r}.",
             status.HTTP_404_NOT_FOUND,
         )
+
+    # Per-provider gate. Mirrors the master `require_auth_enabled` 404 path
+    # — when the operator has not opted into this provider (e.g. a slice-1
+    # demo with only `GOOGLE_ENABLED=true`), the provider's callback is
+    # indistinguishable from the master flag-off state. Runs BEFORE body
+    # validation so the disabled-provider 404 wins over a 422 for a body
+    # the operator never intended this deployment to accept (issue #51).
+    require_provider_enabled(provider, settings)
 
     if provider == "google":
         try:

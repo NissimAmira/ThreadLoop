@@ -57,10 +57,34 @@ def test_auth_disabled_override_works() -> None:
 def test_factory_does_not_mask_validator() -> None:
     """If a caller blanks a required-when-auth-enabled field, `Settings`
     must still raise. Proves the factory is a sane-defaults helper, not a
-    safety bypass."""
+    safety bypass.
+
+    Per-provider gating (#51): the factory defaults every `*_enabled` to
+    True, so blanking a per-provider secret still triggers the validator
+    without the caller having to also enable the provider explicitly.
+    """
     with pytest.raises(ValidationError):
         make_test_settings(facebook_app_id="")
     with pytest.raises(ValidationError):
         make_test_settings(facebook_app_secret="")
     with pytest.raises(ValidationError):
         make_test_settings(google_client_id="")
+
+
+def test_factory_per_provider_disable_skips_secret_validation() -> None:
+    """Caller can opt a provider out by passing `<provider>_enabled=False`,
+    in which case that provider's secrets are no longer required. Mirrors
+    the slice-by-slice rollout where a slice-1 demo only enables Google."""
+    settings = make_test_settings(
+        apple_enabled=False,
+        facebook_enabled=False,
+        apple_client_id="",
+        apple_team_id="",
+        apple_key_id="",
+        apple_private_key="",
+        facebook_app_id="",
+        facebook_app_secret="",
+    )
+    assert settings.google_enabled is True
+    assert settings.apple_enabled is False
+    assert settings.facebook_enabled is False

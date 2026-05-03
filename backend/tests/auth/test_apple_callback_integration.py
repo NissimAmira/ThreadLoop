@@ -451,6 +451,49 @@ def test_missing_required_field_returns_422(auth_client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_apple_disabled_returns_404(
+    auth_client: TestClient,
+    apple_id_token: Callable[..., str],
+    apple_p8_pem: str,
+) -> None:
+    """Per-provider gating (#51): with `AUTH_ENABLED=true` but
+    `APPLE_ENABLED=false`, the Apple callback returns 404. The 404 wins
+    over the body validator — a malformed body for a disabled provider
+    must not produce a 422 that leaks the contract surface."""
+    test_settings = make_test_settings(
+        database_url="postgresql+psycopg://x:x@nope/x",
+        apple_client_id=APPLE_AUD,
+        apple_team_id=APPLE_TEAM,
+        apple_key_id=APPLE_KID,
+        apple_private_key=apple_p8_pem,
+        apple_enabled=False,
+        refresh_cookie_secure=False,
+    )
+    app.dependency_overrides[get_settings] = lambda: test_settings
+    try:
+        resp = auth_client.post(
+            "/api/auth/apple/callback",
+            json={"idToken": apple_id_token(), "code": "ignored"},
+        )
+        # Even a malformed body must 404, not 422 — the per-provider gate
+        # runs before body validation.
+        bad_body_resp = auth_client.post(
+            "/api/auth/apple/callback",
+            json={"completely": "wrong"},
+        )
+    finally:
+        app.dependency_overrides[get_settings] = lambda: make_test_settings(
+            database_url=test_settings.database_url,
+            apple_client_id=APPLE_AUD,
+            apple_team_id=APPLE_TEAM,
+            apple_key_id=APPLE_KID,
+            apple_private_key=apple_p8_pem,
+            refresh_cookie_secure=False,
+        )
+    assert resp.status_code == 404
+    assert bad_body_resp.status_code == 404
+
+
 # ----- account-linking detection (Apple specifics) --------------------------
 
 

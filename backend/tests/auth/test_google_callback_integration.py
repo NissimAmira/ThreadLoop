@@ -269,6 +269,37 @@ def test_auth_disabled_returns_404(
     assert resp.status_code == 404
 
 
+def test_google_disabled_returns_404(
+    auth_client: TestClient,
+    google_id_token: Callable[..., str],
+) -> None:
+    """Per-provider gating (#51): with `AUTH_ENABLED=true` but
+    `GOOGLE_ENABLED=false`, the Google callback returns 404 with the same
+    envelope as the master `AUTH_ENABLED=false` 404 path. Apple/Facebook
+    flags can still be on independently."""
+    test_settings = make_test_settings(
+        database_url="postgresql+psycopg://x:x@nope/x",
+        google_client_id=GOOGLE_AUD,
+        google_enabled=False,
+        refresh_cookie_secure=False,
+    )
+    app.dependency_overrides[get_settings] = lambda: test_settings
+    try:
+        resp = auth_client.post(
+            "/api/auth/google/callback",
+            json={"idToken": google_id_token(aud=GOOGLE_AUD)},
+        )
+    finally:
+        # Restore the auth-enabled (all providers on) override so subsequent
+        # tests in this session see the auth_client default.
+        app.dependency_overrides[get_settings] = lambda: make_test_settings(
+            database_url=test_settings.database_url,
+            google_client_id=GOOGLE_AUD,
+            refresh_cookie_secure=False,
+        )
+    assert resp.status_code == 404
+
+
 def test_truly_unknown_provider_returns_404_or_422(auth_client: TestClient) -> None:
     """Anything outside the AuthProvider enum must not be silently routed."""
     resp = auth_client.post(
