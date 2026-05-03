@@ -155,6 +155,12 @@ document**.
   `can_purchase` capability flags; `transactions` references both
   buyer and seller from that table with a self-purchase check
   constraint. Source: `system_design.md`.
+- **Web API client adapts snake_case wire shapes to camelCase TS
+  types at the boundary** — per-endpoint hand-rolled adapters live in
+  `frontend-web/src/api/client.ts`; do not introduce a generic
+  recursive snake↔camel converter, and do not consume snake_case
+  field names directly in components. Source: `docs/auth.md`. Pending
+  Apple/Facebook slices (#44).
 
 ### Documentation policy (the docs-as-part-of-done rule)
 
