@@ -11,11 +11,25 @@ const LINK_REQUIRED_MESSAGE =
 
 type Status = "idle" | "loading-sdk" | "ready" | "exchanging" | "error";
 
+/**
+ * Constrain `?next=` to same-origin app paths. Anything else (protocol-relative
+ * `//evil.example.com`, absolute `http://evil`, `javascript:` URIs) collapses
+ * to `/` so a crafted sign-in link can't bounce the user off-origin after the
+ * Google round-trip.
+ */
+export function safeNext(raw: string | null | undefined): string {
+  if (!raw) return "/";
+  if (!raw.startsWith("/")) return "/";
+  if (raw.startsWith("//")) return "/";
+  if (raw.startsWith("/\\")) return "/";
+  return raw;
+}
+
 export function SignInPage() {
   const { state, signIn } = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const next = params.get("next") || "/";
+  const next = safeNext(params.get("next"));
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);

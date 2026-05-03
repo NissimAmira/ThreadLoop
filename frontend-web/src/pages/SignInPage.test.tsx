@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthContext";
 import type { GoogleCredentialResponse, GoogleIdApi } from "../auth/google";
-import { SignInPage } from "./SignInPage";
+import { SignInPage, safeNext } from "./SignInPage";
 import { MePage } from "./MePage";
 
 interface StubHandle {
@@ -189,5 +189,35 @@ describe("SignInPage", () => {
       expect(screen.getByTestId("sign-in-error").textContent).toMatch(/rejected/i);
     });
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+});
+
+describe("safeNext", () => {
+  it("accepts a same-origin app path", () => {
+    expect(safeNext("/me")).toBe("/me");
+    expect(safeNext("/listings/abc?x=1")).toBe("/listings/abc?x=1");
+  });
+
+  it("rejects protocol-relative URLs", () => {
+    expect(safeNext("//evil.example.com/path")).toBe("/");
+    expect(safeNext("//evil")).toBe("/");
+  });
+
+  it("rejects javascript: URIs", () => {
+    expect(safeNext("javascript:alert(1)")).toBe("/");
+  });
+
+  it("rejects absolute URLs", () => {
+    expect(safeNext("http://evil")).toBe("/");
+    expect(safeNext("https://evil.example.com/me")).toBe("/");
+  });
+
+  it("rejects backslash-trick URLs", () => {
+    expect(safeNext("/\\evil.example.com")).toBe("/");
+  });
+
+  it("falls back to / for empty / null", () => {
+    expect(safeNext(null)).toBe("/");
+    expect(safeNext("")).toBe("/");
   });
 });
