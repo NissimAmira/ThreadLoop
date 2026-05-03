@@ -106,6 +106,10 @@ peer pushback can't sneak a PR through CR.
 
 ## Step 2.7 — Epic-closing PRs: run the session-handoff checklist
 
+> **Most PRs are not Epic-closing — this step short-circuits in step 3
+> below for them.** Don't skip the step; the determination itself takes
+> seconds and the early exit is the common case.
+
 A PR is **Epic-closing** when its merge will satisfy the last
 unchecked AC on the parent Epic — i.e., once it merges, the Epic
 auto-closes (or the human can manually close it). Determine this by:
@@ -114,6 +118,7 @@ auto-closes (or the human can manually close it). Determine this by:
 2. For each AC: is it ticked already, will it be ticked by this PR, or
    will it remain unticked after merge?
 3. If "remain unticked" count is **zero**, this PR is Epic-closing.
+   Otherwise stop — Step 2.7 is a no-op for this PR.
 
 If the PR is Epic-closing, verify each item in the
 [`CLAUDE.md` § "Ending an Epic — session handoff"](../../CLAUDE.md#ending-an-epic--session-handoff)
@@ -126,6 +131,8 @@ checklist is addressed in this PR's diff:
 - [ ] Domain doc(s) — shipped items moved out of "What's not
   implemented yet."
 - [ ] `system_design.md` matches the shipped schema / API.
+- [ ] `shared/openapi.yaml` matches the shipped contract (endpoints,
+  request/response shapes, status codes).
 - [ ] `docs/repository-structure.md` describes any new folders /
   workspaces / packages.
 - [ ] RFC status line set to **Implemented** (or
@@ -140,9 +147,13 @@ Each missing item is **`must_fix`**, cited with the checklist anchor:
 > of an Epic must update the orientation surface so a fresh session
 > reads accurate state."*
 
-If you cannot determine whether the PR is Epic-closing (Epic has no AC
-checklist, or AC are vague), flag the underlying problem and skip the
-handoff check rather than guessing.
+**Detectability rule (don't accept "vague AC" as a bypass):** If the
+parent Epic has **at least one `- [ ]` checkbox AC**, the Epic is
+detectable — count those, ignore prose AC for the count, and apply
+this step. Only skip if the Epic body has **zero checkbox AC** at all
+(in which case the underlying problem — `pm` / `tech-lead` left the
+Epic without a checklist — is itself a `must_fix` finding citing
+`docs/contributing.md`'s convention that AC are testable lists).
 
 Note: the **release-please PR** is a separate workstream. Don't
 conflate the two — release-please runs against `main` and is merged by

@@ -108,13 +108,21 @@ Determine: read the parent Epic's AC checklist. Will every AC be ticked
 once this PR merges? If yes, this is the **Epic-closing PR** and you
 own the session-handoff updates per `CLAUDE.md` §
 [Ending an Epic — session handoff](../../CLAUDE.md#ending-an-epic--session-handoff)
-**in this same PR**:
+**in this same PR**.
+
+**The "minimal doc impact, strike-through with justification" escape
+hatch above does NOT apply on Epic-closing PRs.** The handoff updates
+are required, not advisory — even if your sub-task itself was
+narrowly scoped.
+
+Bundle into the PR:
 
 - README roadmap line ticked.
 - `CLAUDE.md` "What's actually built vs designed" updated.
 - Domain doc(s) reflect shipped behaviour (out of "What's not
   implemented yet").
 - `system_design.md` matches shipped schema / API.
+- `shared/openapi.yaml` matches shipped contract.
 - RFC status line → **Implemented**.
 - ADRs for any mid-cycle decision not already in
   `docs/adrs/`.

@@ -185,7 +185,14 @@ should be able to:
    under "What's built" rather than "What's not implemented yet."
 4. Read `system_design.md` and find the schema / API surface
    matching what's deployed.
-5. Read `docs/rfcs/NNNN-<slug>.md` and see it marked **Implemented**.
+5. Read `shared/openapi.yaml` and find the contract matching what
+   shipped.
+6. Read `docs/repository-structure.md` and find any new folders /
+   workspaces / packages described.
+7. Read `docs/rfcs/NNNN-<slug>.md` and see it marked **Implemented**.
+8. Read `docs/adrs/` for any architectural decision the Epic locked in
+   (so a future engineer can ask "why did we do it this way?" and find
+   an answer).
 
 If any of those is stale, the handoff failed and the next session
 will trip over it. The closing PR's checklist:
@@ -198,6 +205,10 @@ will trip over it. The closing PR's checklist:
   shipped items moved out of "What's not implemented yet" into the
   built sections.
 - [ ] **`system_design.md`** — schema + API surface match what shipped.
+- [ ] **`shared/openapi.yaml`** — endpoints / request shapes / response
+  shapes / status codes match what shipped. Step 2.5 of `cr` already
+  enforces openapi drift on every PR; this is the explicit Epic-close
+  checkpoint.
 - [ ] **`docs/repository-structure.md`** — any new folders / workspaces
   / packages described.
 - [ ] **RFC status line** — set to **Implemented** (or

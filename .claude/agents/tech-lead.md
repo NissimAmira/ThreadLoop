@@ -267,11 +267,23 @@ this slice merges>"
 **Demo unlocked:** "Epic complete; AC fully checked off."
 
 N. **#N+M** `[Test]` Cross-cutting integration coverage — S
-N+1. **#N+M+1** `[Docs]` **Session-handoff sweep** — README tick,
-     `CLAUDE.md` "What's actually built vs designed" update, domain
-     doc(s) "What's not implemented yet" → built, RFC status →
+N+1. **#N+M+1** `[Docs]` **Session-handoff sweep** (fallback) — README
+     tick, `CLAUDE.md` "What's actually built vs designed" update,
+     domain doc(s) "What's not implemented yet" → built, RFC status →
      Implemented, ADRs for any mid-cycle decision. Required by
      `CLAUDE.md` § "Ending an Epic — session handoff." — S
+
+> **Where the handoff actually lands:** the session-handoff updates
+> belong in the PR that satisfies the **last unchecked AC** of the
+> Epic, not necessarily the `[Docs]` sub-task above. In vertical-slice
+> planning the closing PR is often a `[BE]` / `[FE-Web]` /
+> `[FE-Mobile]` task — its dev agent runs the handoff sub-step from
+> its own `*-dev.md` file. Only fall back to a standalone `[Docs]`
+> closeout sub-task when no other PR naturally closes the last AC
+> (e.g., the Epic's tail is purely documentation work, or the closing
+> sub-task PR is too narrowly scoped to absorb the cross-cutting docs
+> updates cleanly). The `cr` agent's Step 2.7 detects the closing PR
+> regardless of its area label.
 
 **ADRs written:** docs/adrs/NNNN-<slug>.md (if any)
 
