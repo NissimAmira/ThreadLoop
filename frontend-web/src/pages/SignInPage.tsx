@@ -74,32 +74,38 @@ export function SignInPage() {
     [signIn, navigate, next],
   );
 
-  const initAndRender = useCallback(
-    (gis: Awaited<ReturnType<typeof loadGoogleIdentity>>) => {
-      gis.initialize({
-        client_id: GOOGLE_CLIENT_ID || "stub-client-id",
-        callback: (resp) => {
-          void handleCredential(resp);
-        },
-        ux_mode: "popup",
+  // Latest credential handler in a ref so initAndRender doesn't have to
+  // re-bind (and re-render the button) every time `next` or `signIn` change
+  // identity. The GIS callback closes over the ref, so it always sees the
+  // latest handler.
+  const handleCredentialRef = useRef(handleCredential);
+  useEffect(() => {
+    handleCredentialRef.current = handleCredential;
+  }, [handleCredential]);
+
+  const initAndRender = useCallback((gis: Awaited<ReturnType<typeof loadGoogleIdentity>>) => {
+    gis.initialize({
+      client_id: GOOGLE_CLIENT_ID || "stub-client-id",
+      callback: (resp) => {
+        void handleCredentialRef.current(resp);
+      },
+      ux_mode: "popup",
+    });
+    if (buttonContainerRef.current) {
+      buttonContainerRef.current.replaceChildren();
+      gis.renderButton(buttonContainerRef.current, {
+        type: "standard",
+        theme: "outline",
+        size: "large",
+        text: "signin_with",
+        shape: "rectangular",
+        logo_alignment: "left",
       });
-      if (buttonContainerRef.current) {
-        buttonContainerRef.current.replaceChildren();
-        gis.renderButton(buttonContainerRef.current, {
-          type: "standard",
-          theme: "outline",
-          size: "large",
-          text: "signin_with",
-          shape: "rectangular",
-          logo_alignment: "left",
-        });
-      }
-    },
-    [handleCredential],
-  );
+    }
+  }, []);
 
   useEffect(() => {
-    if (state.status !== "anonymous" && state.status !== "loading") return;
+    if (state.status === "authenticated") return;
     let cancelled = false;
     setStatus("loading-sdk");
     loadGoogleIdentity()
@@ -127,7 +133,11 @@ export function SignInPage() {
     return () => {
       cancelled = true;
     };
-  }, [state.status, initAndRender]);
+    // Intentionally not depending on state.status: we want to render the
+    // button exactly once on mount. A transition to `authenticated` is
+    // handled by the redirect effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initAndRender]);
 
   const retry = useCallback(() => {
     setError(null);
