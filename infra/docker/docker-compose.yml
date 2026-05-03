@@ -40,7 +40,7 @@ services:
     volumes:
       - meili_data:/meili_data
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7700/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -56,6 +56,17 @@ services:
       MEILI_URL: ${MEILI_URL}
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-}
+      REFRESH_TOKEN_HMAC_KEY: ${REFRESH_TOKEN_HMAC_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:-}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:-}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -75,6 +86,7 @@ services:
     restart: unless-stopped
     environment:
       VITE_API_URL: http://localhost:${BACKEND_PORT:-8000}
+      VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
     ports:
       - "5173:5173"
     volumes:
