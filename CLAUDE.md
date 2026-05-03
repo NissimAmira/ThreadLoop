@@ -61,8 +61,8 @@ its own context window so phase artifacts don't pollute each other.
                              ▼
               advisory comments on Epic
               (pm revises or human overrides;
-               unresolved must_fix advisories
-               block tech-lead breakdown)
+               human is expected to resolve
+               before invoking tech-lead)
                              │
                      invoke tech-lead
                              │
@@ -130,7 +130,15 @@ invocation.
 
 Like a real dev team, every agent is expected to **push back when an
 upstream artifact violates a load-bearing rule** — not just rubber-stamp
-the previous step. Pushback is concrete, citable, and resolvable:
+the previous step. The advisory agents (`biz-dev`, `ux-designer`) are
+**not gates**: they have no `Write`/`Edit` tools and post comments only.
+The single automated enforcement seam is `cr`'s Step 2.6, which scans
+the linked task / Epic / PR at review time and surfaces any unaddressed
+`[<agent> pushback]` markers as `must_fix`. Everywhere else in the
+flow, the human is the gate — they read advisory comments and decide
+whether to revise the upstream artifact or proceed.
+
+Pushback is concrete, citable, and resolvable:
 
 - It cites the specific rule, doc, AC text, or contract field that's
   being violated. Vibes-only objections aren't pushback.

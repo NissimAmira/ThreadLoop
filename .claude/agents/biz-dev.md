@@ -147,8 +147,19 @@ Two artifacts every time:
 
 ### A. GitHub comment on the Epic / task / PR
 
-Post via `gh issue comment <N> --body-file <path>` (or `gh pr comment`).
-Format:
+Post via `gh issue comment <N>` or `gh pr comment <N>` using inline
+heredoc — you have `Bash` but no `Write`/`Edit`, so do **not** create a
+temp file:
+
+```sh
+gh issue comment <N> --body "$(cat <<'EOF'
+## biz-dev review — ...
+...
+EOF
+)"
+```
+
+Format of the comment body:
 
 ```markdown
 ## biz-dev review — <Epic / breakdown / PR scope check>
