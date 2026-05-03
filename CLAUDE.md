@@ -15,6 +15,11 @@ If those four shell commands return nothing surprising, the repo is in a
 **clean state** — pick the next unchecked item from the README roadmap and
 branch off `main`.
 
+> The session-start surface above is only useful if the previous Epic
+> left it accurate. The symmetric rule on the way out is in
+> [`§ Ending an Epic — session handoff`](#ending-an-epic--session-handoff)
+> below; the `cr` agent enforces it on Epic-closing PRs.
+
 ## What this repo is
 
 A peer-to-peer second-hand fashion marketplace with AR try-on, structured as a
@@ -161,6 +166,52 @@ When you change a convention, schema constraint, or process rule, update the
 relevant agent rubric in the same PR — agents are not auto-synced. The
 [`cr`](./.claude/agents/cr.md) agent enforces this by flagging missing
 agent updates.
+
+## Ending an Epic — session handoff
+
+The orientation files listed in [§ Starting a new session](#starting-a-new-session--read-these-first-in-order)
+are only useful if the previous Epic left them accurate. **The closing
+PR of an Epic — the one that satisfies the last unchecked AC — must
+update the orientation surface in the same PR.** This is a hard rule,
+enforced by the `cr` agent on Epic-closing PRs (see `cr.md` Step 2.7).
+
+A new Claude Code session, started cold the day after an Epic closes,
+should be able to:
+
+1. Read `CLAUDE.md` and find the new built state in "What's actually
+   built vs designed."
+2. Read `README.md` and find the Epic's roadmap line ticked.
+3. Read the relevant `docs/<topic>.md` and find the shipped behaviour
+   under "What's built" rather than "What's not implemented yet."
+4. Read `system_design.md` and find the schema / API surface
+   matching what's deployed.
+5. Read `docs/rfcs/NNNN-<slug>.md` and see it marked **Implemented**.
+
+If any of those is stale, the handoff failed and the next session
+will trip over it. The closing PR's checklist:
+
+- [ ] **README roadmap** — line item ticked. (Roadmap automation reads
+  commit messages, but hand-verify on the merged commit.)
+- [ ] **`CLAUDE.md` "What's actually built vs designed"** — paragraph
+  reflects the new built state if the Epic shipped a major feature.
+- [ ] **Domain doc(s)** (`docs/auth.md` / `search.md` / `assets.md`) —
+  shipped items moved out of "What's not implemented yet" into the
+  built sections.
+- [ ] **`system_design.md`** — schema + API surface match what shipped.
+- [ ] **`docs/repository-structure.md`** — any new folders / workspaces
+  / packages described.
+- [ ] **RFC status line** — set to **Implemented** (or
+  **Partially implemented** with the deferred items called out and a
+  follow-up Epic referenced).
+- [ ] **ADRs for any mid-cycle decisions** that weren't in the
+  original `tech-lead` breakdown.
+- [ ] **release-please PR** — per the per-Epic cadence rule
+  (`docs/contributing.md` § "Releases"), merge the held-open
+  release-please PR for this Epic, or align it with the next one if
+  Epics are bundling.
+
+This is symmetric with the start-of-session reads: every file a fresh
+session opens at boot is a file the closing PR must keep accurate.
 
 ## Workspaces
 

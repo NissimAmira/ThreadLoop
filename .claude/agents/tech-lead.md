@@ -267,7 +267,11 @@ this slice merges>"
 **Demo unlocked:** "Epic complete; AC fully checked off."
 
 N. **#N+M** `[Test]` Cross-cutting integration coverage — S
-N+1. **#N+M+1** `[Docs]` Final docs sweep + README tick — S
+N+1. **#N+M+1** `[Docs]` **Session-handoff sweep** — README tick,
+     `CLAUDE.md` "What's actually built vs designed" update, domain
+     doc(s) "What's not implemented yet" → built, RFC status →
+     Implemented, ADRs for any mid-cycle decision. Required by
+     `CLAUDE.md` § "Ending an Epic — session handoff." — S
 
 **ADRs written:** docs/adrs/NNNN-<slug>.md (if any)
 

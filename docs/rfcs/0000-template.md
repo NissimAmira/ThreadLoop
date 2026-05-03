@@ -1,9 +1,10 @@
 # RFC NNNN: <Title>
 
-- **Status:** Draft | Under review | Approved | Rejected | Superseded by RFC NNNN
+- **Status:** Draft | Under review | Approved | Implemented | Partially implemented | Rejected | Superseded by RFC NNNN
 - **Author:** <name>
 - **Created:** YYYY-MM-DD
 - **Approved:** YYYY-MM-DD (or `—`)
+- **Implemented:** YYYY-MM-DD (or `—`)
 - **Tracking issue:** #<epic-issue-number>
 
 > RFCs are for **non-trivial** product or architectural changes — anything

@@ -75,6 +75,24 @@ Common updates:
 - Most mobile PRs are visual / flow work and have minimal doc impact —
   strike through with justification when so.
 
+### If this PR is Epic-closing — run the session-handoff checklist
+
+Determine: read the parent Epic's AC checklist. Will every AC be ticked
+once this PR merges? If yes, this is the **Epic-closing PR** and you
+own the session-handoff updates per `CLAUDE.md` §
+[Ending an Epic — session handoff](../../CLAUDE.md#ending-an-epic--session-handoff)
+**in this same PR**:
+
+- README roadmap line ticked.
+- `CLAUDE.md` "What's actually built vs designed" updated.
+- Domain doc(s) reflect shipped behaviour (mobile platform notes if
+  relevant).
+- `frontend-mobile/README.md` updated if build/run/test changed.
+- RFC status line → **Implemented**.
+- ADRs for any mid-cycle native-module / platform decision.
+
+`cr` flags missing items as `must_fix` on Epic-closing PRs.
+
 ## Step 6 — Test locally
 
 ```sh
