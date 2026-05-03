@@ -432,11 +432,89 @@ def open_transaction(user: User = Depends(require_buyer)):  # checks can_purchas
 A user can hold both roles simultaneously and switch contexts without
 re-authenticating.
 
+## Web client (slice 1 — Google only)
+
+The web sign-in surface ships in vertical slices (#19, #38, #39, #40). Slice
+1 lands the Google end-to-end demo plus the shared scaffolding all later
+slices reuse.
+
+### Auth context
+
+`frontend-web/src/auth/AuthContext.tsx` exposes a single `useAuth()` hook
+returning a tagged-union `state` and two actions:
+
+```ts
+type AuthState =
+  | { status: "loading" }
+  | { status: "anonymous" }
+  | { status: "authenticated"; user: User; accessToken: string };
+
+interface AuthContextValue {
+  state: AuthState;
+  signIn: (session: AuthenticatedSession) => void;
+  signOut: () => Promise<void>;
+}
+```
+
+Three states only — kept deliberately small so consumers don't write boolean
+ladders. `loading` is the gap before the first-paint silent refresh resolves;
+`anonymous` is steady-state-no-session; `authenticated` carries both the user
+and the access JWT so consumers don't need a second hook to make an
+authenticated request.
+
+The provider mounts a single `useEffect` on first render that calls
+`POST /api/auth/refresh`. If the refresh cookie is valid the user lands on
+`authenticated`; any failure (401, network) collapses to `anonymous`. The
+in-memory access token never touches `localStorage` per RFC 0001's
+"in-memory only" stance.
+
+`signIn` accepts an `AuthenticatedSession` directly (the Google callback
+return shape). `signOut` posts `/api/auth/logout` and drops to `anonymous`
+even if the network call fails — the route is idempotent server-side.
+
+### API client wire-shape adapter
+
+The backend serializes per OpenAPI in `snake_case` (`access_token`,
+`display_name`, `link_required`); the shared TS types in
+`@threadloop/shared` are `camelCase`. `frontend-web/src/api/client.ts`
+converts at the boundary so the rest of the workspace consumes the typed
+shapes unchanged. The conversion is hand-rolled per endpoint — adding a
+generic recursive snake↔camel converter would lose type safety, and we'd
+rather catch a drifted field at the adapter than have it silently round-trip
+as `undefined`. The drift between OpenAPI snake and TS camel was inherited
+from #12; reconciling it (either by adding `alias_generator` on the Pydantic
+side or by switching the TS types to snake) is tracked separately and not
+in scope for this slice.
+
+### Google Identity Services
+
+`frontend-web/src/auth/google.ts` lazy-loads
+`https://accounts.google.com/gsi/client` on first need and exposes a typed
+`loadGoogleIdentity()` promise. Tests + Cypress install
+`window.__threadloopGoogleIdStub__` before the page mounts; the loader
+returns the stub instead of injecting the real script, which keeps the
+smoke test deterministic and removes any need for a real OAuth client id in
+CI. `VITE_GOOGLE_CLIENT_ID` is required at runtime in real builds — when
+unset, `/sign-in` renders an actionable configuration error rather than a
+silently broken button.
+
+### Out of scope here
+
+Apple and Facebook sign-in buttons (#38 / #39) and the full `link_required`
+linking UI (#40) ship in their own slices. Slice 1's `link_required`
+handling is a generic error message ("This email is registered with another
+provider; please sign in with that provider instead") with no second-step
+re-auth — enough to validate the contract surface without prematurely
+building UI that #40 will rework.
+
 ## What's not implemented yet
 
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
-- Provider SDK integration (web + mobile)
+- Apple sign-in button on web (slice 2 / #38).
+- Facebook sign-in button on web (slice 3 / #39).
+- Full `link_required` linking UI flow on web (slice 4 / #40).
+- Mobile SDK integration (#20).
 - Account-linking *resolution* — `POST /api/auth/link` (#18). Detection is
   already wired into the Google and Apple callbacks; Facebook never trips
   the link path because Graph API doesn't expose `email_verified` (see
@@ -472,3 +550,11 @@ Already landed:
   from #34) bundled in: cache now keys on
   `(team_id, client_id, key_id, hash(private_key_pem))` so a manual
   rotation no longer serves a stale-but-still-young JWT.
+- **Slice-1 FE half** (#19): `/sign-in` page with a single Google button
+  (Google Identity Services SDK), `/me` page rendering display name +
+  email, `useAuth()` context with silent-refresh on first paint, header
+  reflecting the signed-in user, and a Cypress smoke test that stubs the
+  Google flow and asserts the user lands on `/me`. `link_required`
+  responses surface as a generic error string — the linking UI itself is
+  slice 4 (#40). Auth context and wire-shape adapter conventions
+  documented above under "Web client (slice 1 — Google only)".

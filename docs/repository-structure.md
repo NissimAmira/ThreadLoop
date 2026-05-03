@@ -16,9 +16,11 @@ threadloop/
 │
 ├── frontend-web/         Vite + React + TS + Tailwind
 │   ├── src/
-│   │   ├── main.tsx          React 18 entry point
-│   │   ├── App.tsx           Layout shell
+│   │   ├── main.tsx          React 18 entry point (BrowserRouter + AuthProvider)
+│   │   ├── App.tsx           Layout shell + route table
 │   │   ├── api/              Generated SDK + thin fetch wrapper
+│   │   ├── auth/             AuthProvider + useAuth + Google Identity loader
+│   │   ├── pages/            Route components (HomePage, SignInPage, MePage)
 │   │   └── components/       Co-located component + test files
 │   ├── cypress/              E2E tests (smoke on every PR, full suite nightly)
 │   ├── vite.config.ts
