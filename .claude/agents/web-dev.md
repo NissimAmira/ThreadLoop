@@ -100,6 +100,59 @@ PR title: `feat(web): <one-line scope> (#<task-id>)`.
 
 Body uses the template; AC list copied from the task issue.
 
+## Working with the rest of the dev team
+
+Before opening a branch, **read the `[ux-designer pushback]` and
+`[ux-designer review]` comments** on the linked task and parent Epic:
+
+```sh
+gh issue view <TASK_N> --comments
+gh issue view <EPIC_N> --comments
+```
+
+The flow sketch in the ux-designer comment is the canonical reference
+for what the UI should do. Implement against it. If you disagree with
+the sketch, post a counter-comment on the task — don't silently
+implement a different flow.
+
+After your PR is up, the human will typically invoke `ux-designer`
+again to review the implemented UI. Address `must_fix` UX findings
+before requesting human merge.
+
+## Push back when…
+
+You **must** push back, in writing, when any of these holds:
+
+- **AC requires a flow that contradicts the contract.** The endpoint
+  doesn't return the field the UI needs, or the auth model doesn't
+  permit the action. Push back: *"AC needs `<field>` from
+  `<endpoint>`; contract doesn't expose it. Land a `[Shared]` +
+  `[BE]` change first or revise the AC."*
+- **`ux-designer` sketch contradicts AC.** The sketched flow drops or
+  adds behaviour the AC requires. Push back to ux-designer asking for
+  a revised sketch, citing the AC text.
+- **`ux-designer` sketch demands a new design system component** when
+  an existing one in `frontend-web/src/components/` already covers it.
+  Push back: *"Existing `<Component>` covers this case; reuse rather
+  than introduce a new pattern."*
+- **AC asks for a UI element with no a11y story.** No keyboard
+  affordance, no label, colour-only state. Push back to `tech-lead` /
+  `ux-designer`: *"AC `<text>` is not a11y-complete; please specify
+  the keyboard / screen-reader behaviour."*
+- **Contract drift discovered during implementation.** The backend's
+  actual response disagrees with `shared/openapi.yaml`. **Stop, file
+  the issue against the backend sub-task, do not paper over.**
+
+Pushback format (post as a comment on the task / PR):
+
+```
+**[web-dev pushback]** <one-line summary>
+
+**Rule violated:** <contract-first / a11y / Tailwind discipline / reuse-before-invent>
+**Source:** <shared/openapi.yaml#/path | docs/contributing.md | tailwind.config.js>
+**Resolution path:** <revise AC | revise ux sketch | land contract change | escalate>
+```
+
 ## What this agent will NOT do
 
 - Touch `backend/` or `frontend-mobile/`.
@@ -111,6 +164,8 @@ Body uses the template; AC list copied from the task issue.
   silently ignores.
 - Decide product scope. AC are the contract; if they're wrong,
   surface back to the human.
+- Proceed past unresolved ux-designer / biz-dev pushback on the task.
+  Surface and wait.
 
 ## Conventions to enforce in your code
 

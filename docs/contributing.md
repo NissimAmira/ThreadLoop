@@ -36,30 +36,46 @@ the changes and commit again. To bypass in an emergency:
 
 ## Adding a feature end-to-end (the multi-agent flow)
 
-The canonical flow uses the dev-cycle subagents in `.claude/agents/`. See
+The canonical flow uses the eight dev-cycle subagents in `.claude/agents/`. See
 [`CLAUDE.md` → "How the dev cycle works"](../CLAUDE.md#how-the-dev-cycle-works)
-for the full picture. Briefly:
+for the full picture, including the cross-agent pushback discipline (every
+agent has a `## Push back when…` section; `cr` surfaces unaddressed
+`[<agent> pushback]` comments as `must_fix`). Briefly:
 
 1. **Design the feature with the `pm` agent.** Output: an RFC at
    `docs/rfcs/NNNN-<slug>.md` (for non-trivial features) and an Epic
    GitHub issue with user stories + acceptance criteria.
-2. **Decompose with the `tech-lead` agent.** Output: sub-issues under
+2. **Get advisory review of the Epic.** Invoke `biz-dev` (ROI / funnel
+   alignment / market context) and — for any user-facing Epic —
+   `ux-designer` (flow sketch, friction, AR-3-clicks rule, a11y).
+   Both are **advisory**: they don't block directly, but they post
+   `[biz-dev pushback]` / `[ux-designer pushback]` comments on the
+   Epic, and `cr` will block downstream PRs whose linked task carries
+   unaddressed pushback. Resolve or respond before invoking `tech-lead`.
+3. **Decompose with the `tech-lead` agent.** Output: sub-issues under
    the Epic by area (`[BE]`, `[FE-Web]`, `[FE-Mobile]`, `[Test]`,
    `[Infra]`, `[Docs]`), each with concrete AC, dependencies, and
    risks. May write an ADR if a non-obvious architectural choice is
    made.
-3. **Implement each sub-task.** Invoke `backend-dev` / `web-dev` /
-   `mobile-dev` per area. Each produces one branch + one PR with the
+4. **Re-invoke advisors on the breakdown if scope shifted.** `biz-dev`
+   for slice ordering / cost-vs-value; `ux-designer` for FE task flow
+   sketches before any dev agent starts coding. Same advisory-but-cr-
+   surfaces-it semantics as step 2.
+5. **Implement each sub-task.** Invoke `backend-dev` / `web-dev` /
+   `mobile-dev` per area. Each reads `[<agent> pushback]` comments on
+   the linked task before opening a branch and produces one PR with
    linked task issue, AC list, and tests.
-4. **Review with the `cr` agent.** It validates the PR against the
-   linked task's AC and the project rubric. Address `must_fix`
-   findings before merge.
-5. **Merge.** release-please will eventually cut a versioned release.
+6. **Review with the `cr` agent.** Validates the PR against the linked
+   task's AC, the project rubric, **and** scans the linked task / Epic
+   / PR for unaddressed advisory pushback. Address `must_fix` before
+   merge.
+7. **Merge.** release-please will eventually cut a versioned release.
 
 If a feature is small enough that this multi-step flow feels heavy
 (e.g., adding a single CRUD endpoint that follows existing patterns),
-skip the RFC, open the Epic + tasks directly, and proceed. The `cr`
-agent will not flag the missing RFC for trivial changes.
+skip the RFC and the advisory steps, open the Epic + tasks directly,
+and proceed. The `cr` agent will not flag the missing RFC or skipped
+advisory review for trivial changes.
 
 ### The technical work inside any backend feature
 

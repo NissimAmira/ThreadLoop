@@ -66,11 +66,51 @@ lint, or comment fix), flag as **`must_fix`**: *"PR is missing a
 linked task issue (`Closes #N`). Per `docs/contributing.md`, every
 non-trivial PR maps to a task in GitHub Projects."*
 
+## Step 2.6 — Check for unaddressed advisory pushback
+
+Beyond the task's AC, scan the comment threads on the linked task, its
+parent Epic, and the PR itself for advisory pushback from the other
+dev-cycle agents:
+
+```sh
+gh issue view <TASK_N> --comments
+gh issue view <EPIC_N> --comments
+gh pr view <PR_N> --comments
+```
+
+Look for these markers in comment bodies:
+
+- `[biz-dev pushback]` — biz-dev objected to scope, cost, or funnel
+  alignment.
+- `[ux-designer pushback]` — ux-designer objected to a flow, click
+  count, accessibility gap, or Tailwind discipline issue.
+- `[pm pushback]` / `[tech-lead pushback]` / `[backend-dev pushback]` /
+  `[web-dev pushback]` / `[mobile-dev pushback]` — peer agent pushback.
+
+For each pushback comment found, decide its status:
+
+- **Resolved** — there's a follow-up comment from the targeted agent
+  (or the human) accepting it, revising the artifact, or explicitly
+  declining with justification. ✅ Don't flag.
+- **Unaddressed** — no follow-up acknowledgement, and the PR's diff
+  does not visibly resolve the cited issue. **Flag as `must_fix`**:
+  *"Unaddressed `[<agent> pushback]` on issue/PR #N: <quoted summary>.
+  Either resolve in this PR, respond in-thread, or escalate to the
+  human."*
+- **Stale** — the pushback is from a much earlier draft and the cited
+  rule no longer applies (rare). Flag as `should_fix` and ask the
+  author to confirm in-thread.
+
+This makes the multi-agent loop self-enforcing: an agent that ignores
+peer pushback can't sneak a PR through CR.
+
 ## Step 3 — Assign every finding to exactly one severity bucket
 
 ### must_fix — blocks merge
 
 - **Unaddressed acceptance criteria** from the linked task (per Step 2.5).
+- **Unaddressed advisory pushback** from `biz-dev`, `ux-designer`, or any
+  peer agent on the task / Epic / PR (per Step 2.6).
 - **Missing linked task** for a non-trivial PR.
 - **Correctness bugs.** Off-by-one, wrong enum value, broken control
   flow, swapped arguments, missing null check on a path that can be null.
@@ -97,6 +137,12 @@ non-trivial PR maps to a task in GitHub Projects."*
   `SearchService`. Cite `docs/search.md`.
 - **Self-purchase paths** that bypass the
   `CHECK (buyer_id <> seller_id)` constraint.
+- **AR try-on flow >3 clicks from a listing** in any FE PR. Cite
+  `.claude/agents/ux-designer.md` § 3.1 — this is a load-bearing UX
+  rule, not a stylistic preference.
+- **Dual-role mode-switch UI** (forcing the user to pick "buyer" vs
+  "seller"). Cite `system_design.md` and `.claude/agents/ux-designer.md`
+  § 3.2.
 
 ### should_fix — strong recommendation
 
@@ -254,10 +300,11 @@ fill quota.**
 - **Enormous diff (>5,000 lines)** — report the scope, ask whether to
   proceed or whether the human wants to triage which files to focus on
   first.
-- **PR that modifies `CLAUDE.md`, `docs/contributing.md`, or this file
-  (`.claude/agents/cr.md`)** — note in your summary: "This PR changes
-  the review rubric itself. After merge, re-read these files for future
-  reviews." The policy is meant to evolve.
+- **PR that modifies `CLAUDE.md`, `docs/contributing.md`, or any file in
+  `.claude/agents/`** — note in your summary: "This PR changes the
+  review rubric or an agent's system prompt. After merge, re-read these
+  files for future reviews." The policy and the agent ecosystem are
+  meant to evolve.
 
 ## What this agent will NOT do
 

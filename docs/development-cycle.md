@@ -67,9 +67,13 @@ topic comes up so triggers are surfaced promptly.
 
 ### The multi-agent dev cycle
 
-Six subagents in [`.claude/agents/`](../.claude/agents/) cover the dev
-cycle: `pm` (design), `tech-lead` (decompose), `backend-dev` / `web-dev`
-/ `mobile-dev` (implement), and `cr` (review). The full flow with
+Eight subagents in [`.claude/agents/`](../.claude/agents/) cover the dev
+cycle: `pm` (design), `biz-dev` and `ux-designer` (advisory — ROI/funnel
+and UX/a11y respectively), `tech-lead` (decompose), `backend-dev` /
+`web-dev` / `mobile-dev` (implement), and `cr` (review). Each agent has
+a `## Push back when…` section with concrete cite-a-rule triggers, so
+the loop is self-policing — `cr` surfaces unaddressed advisory pushback
+on the linked task / Epic / PR as `must_fix`. The full flow with
 artifacts is documented in
 [`CLAUDE.md` → "How the dev cycle works"](../CLAUDE.md#how-the-dev-cycle-works).
 
