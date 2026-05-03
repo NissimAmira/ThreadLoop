@@ -472,20 +472,6 @@ in-memory access token never touches `localStorage` per RFC 0001's
 return shape). `signOut` posts `/api/auth/logout` and drops to `anonymous`
 even if the network call fails — the route is idempotent server-side.
 
-### API client wire-shape adapter
-
-The backend serializes per OpenAPI in `snake_case` (`access_token`,
-`display_name`, `link_required`); the shared TS types in
-`@threadloop/shared` are `camelCase`. `frontend-web/src/api/client.ts`
-converts at the boundary so the rest of the workspace consumes the typed
-shapes unchanged. The conversion is hand-rolled per endpoint — adding a
-generic recursive snake↔camel converter would lose type safety, and we'd
-rather catch a drifted field at the adapter than have it silently round-trip
-as `undefined`. The drift between OpenAPI snake and TS camel was inherited
-from #12; reconciling it (either by adding `alias_generator` on the Pydantic
-side or by switching the TS types to snake) is tracked separately and not
-in scope for this slice.
-
 ### Google Identity Services
 
 `frontend-web/src/auth/google.ts` lazy-loads
@@ -556,5 +542,13 @@ Already landed:
   reflecting the signed-in user, and a Cypress smoke test that stubs the
   Google flow and asserts the user lands on `/me`. `link_required`
   responses surface as a generic error string — the linking UI itself is
-  slice 4 (#40). Auth context and wire-shape adapter conventions
-  documented above under "Web client (slice 1 — Google only)".
+  slice 4 (#40). Auth context conventions documented above under
+  "Web client (slice 1 — Google only)".
+- **camelCase wire shape** (#44): the contract drift between
+  `shared/openapi.yaml` (snake) and `shared/src/types/` (camel) inherited
+  from #12 was resolved by flipping the wire to camelCase via Pydantic
+  `alias_generator=to_camel + populate_by_name=True +
+  serialize_by_alias=True` (ADR 0009). The per-endpoint adapter slice 1
+  shipped in `frontend-web/src/api/client.ts` is retired; web (and mobile,
+  when slice 5 lands) consume the typed shapes from `@threadloop/shared`
+  directly with no boundary translation.

@@ -259,12 +259,18 @@ document**.
   `can_purchase` capability flags; `transactions` references both
   buyer and seller from that table with a self-purchase check
   constraint. Source: `system_design.md`.
-- **Web API client adapts snake_case wire shapes to camelCase TS
-  types at the boundary** — per-endpoint hand-rolled adapters live in
-  `frontend-web/src/api/client.ts`; do not introduce a generic
-  recursive snake↔camel converter, and do not consume snake_case
-  field names directly in components. Source: `docs/auth.md`. Pending
-  Apple/Facebook slices (#44).
+- **camelCase on the wire** — every JSON property in
+  `shared/openapi.yaml` (and every request/response field on a Pydantic
+  `BaseModel` used by a route) must be camelCase. Snake_case wire
+  fields, or a backend `BaseModel` whose response/request fields lack
+  the `WireBase` mixin (or equivalent
+  `alias_generator=to_camel + populate_by_name=True +
+  serialize_by_alias=True` config), are **`must_fix`**. Cite ADR 0009
+  (`docs/adrs/0009-camelcase-on-the-wire.md`). Per-endpoint hand-rolled
+  snake↔camel adapters in `frontend-web/src/api/client.ts` are also
+  forbidden — the contract is unified, the client consumes shared TS
+  types directly. The previous adapter (slice 1, PR #43) was retired
+  in #44.
 
 ### Documentation policy (the docs-as-part-of-done rule)
 

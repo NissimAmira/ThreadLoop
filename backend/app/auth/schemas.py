@@ -3,6 +3,15 @@
 These mirror `shared/openapi.yaml` § auth and `shared/src/types/auth.ts` /
 `shared/src/types/user.ts`. Keep field names + nullability in sync if either
 side moves.
+
+Wire-shape policy (ADR 0009): every model that crosses the HTTP boundary —
+request bodies and response shapes — uses `to_camel` aliases so the JSON on
+the wire is camelCase while Python attribute names stay snake_case. Both
+`populate_by_name=True` (so internal callers still work via the Python
+attribute name) and `serialize_by_alias=True` (so FastAPI uses the alias on
+the way out — without this, only inbound parsing accepts the alias) are
+required. The `WireBase` mixin centralises that config so a future schema
+can't accidentally ship without it.
 """
 
 from __future__ import annotations
@@ -12,17 +21,28 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.alias_generators import to_camel
 
 AuthProvider = Literal["google", "apple", "facebook"]
 
 
-class GoogleSsoCallbackInput(BaseModel):
+class WireBase(BaseModel):
+    """Mixin: every wire model camelCases its JSON aliases per ADR 0009."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
+
+
+class GoogleSsoCallbackInput(WireBase):
     """Body for `POST /api/auth/google/callback`."""
 
     id_token: str = Field(..., min_length=1, description="Google-issued ID token.")
 
 
-class AppleSsoCallbackInput(BaseModel):
+class AppleSsoCallbackInput(WireBase):
     """Body for `POST /api/auth/apple/callback`.
 
     Apple sends `name` only in the FIRST callback of a session (and even then
@@ -45,7 +65,7 @@ class AppleSsoCallbackInput(BaseModel):
     )
 
 
-class FacebookSsoCallbackInput(BaseModel):
+class FacebookSsoCallbackInput(WireBase):
     """Body for `POST /api/auth/facebook/callback`.
 
     Facebook is the odd one out: there is no ID token to verify against a
@@ -62,10 +82,18 @@ class FacebookSsoCallbackInput(BaseModel):
     )
 
 
-class UserOut(BaseModel):
+class UserOut(WireBase):
     """OpenAPI `User`. Field names match the spec verbatim."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # `from_attributes=True` is layered on top of WireBase's config so we can
+    # build instances directly from SQLAlchemy rows via `model_validate(row)`
+    # without losing the camelCase wire aliasing.
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        serialize_by_alias=True,
+        from_attributes=True,
+    )
 
     id: uuid.UUID
     provider: AuthProvider
@@ -80,7 +108,7 @@ class UserOut(BaseModel):
     updated_at: datetime
 
 
-class Session(BaseModel):
+class Session(WireBase):
     """OpenAPI `Session`. The same envelope serves the happy path and the
     pending-link path; client distinguishes via `link_required`. We populate
     only the fields appropriate for each branch and let Pydantic's
@@ -106,6 +134,10 @@ class Session(BaseModel):
           `access_token` / `expires_at` / `user` must all be None.
         - `link_required=False` → `access_token` + `expires_at` + `user` set;
           `link_provider` / `link_token` must be None.
+
+        Validators run on Python attribute names, NOT aliases — `WireBase`'s
+        `alias_generator` only changes wire serialization. Don't rename the
+        attributes here in a misguided attempt to align them with the alias.
 
         Raises `ValueError` so Pydantic surfaces it as a normal validation
         error.

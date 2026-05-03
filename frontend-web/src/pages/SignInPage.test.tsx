@@ -41,24 +41,25 @@ function installGisStub(): StubHandle {
   };
 }
 
+// Wire is camelCase per ADR 0009 — keys mirror what the backend serializes.
 const wireUser = {
   id: "00000000-0000-0000-0000-000000000001",
   provider: "google",
   email: "ada@example.com",
-  email_verified: true,
-  display_name: "Ada Lovelace",
-  avatar_url: null,
-  can_sell: false,
-  can_purchase: true,
-  seller_rating: null,
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-01T00:00:00Z",
+  emailVerified: true,
+  displayName: "Ada Lovelace",
+  avatarUrl: null,
+  canSell: false,
+  canPurchase: true,
+  sellerRating: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
 };
 
 const wireSession = {
-  link_required: false,
-  access_token: "access-jwt",
-  expires_at: "2030-01-01T00:00:00Z",
+  linkRequired: false,
+  accessToken: "access-jwt",
+  expiresAt: "2030-01-01T00:00:00Z",
   user: wireUser,
 };
 
@@ -126,7 +127,7 @@ describe("SignInPage", () => {
     });
   });
 
-  it("renders the link_required generic error without redirecting", async () => {
+  it("renders the linkRequired generic error without redirecting", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (url.includes("/api/auth/refresh")) {
@@ -136,9 +137,9 @@ describe("SignInPage", () => {
         return Promise.resolve(
           new Response(
             JSON.stringify({
-              link_required: true,
-              link_provider: "apple",
-              link_token: "link-jwt",
+              linkRequired: true,
+              linkProvider: "apple",
+              linkToken: "link-jwt",
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),

@@ -112,17 +112,17 @@ def test_new_user_signin_creates_user_and_refresh_row(
         picture="https://cdn.example/avatars/n.png",
     )
 
-    resp = auth_client.post("/api/auth/google/callback", json={"id_token": token})
+    resp = auth_client.post("/api/auth/google/callback", json={"idToken": token})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False
-    assert body["access_token"]
-    assert body["expires_at"]
+    assert body["linkRequired"] is False
+    assert body["accessToken"]
+    assert body["expiresAt"]
     assert body["user"]["provider"] == "google"
     assert body["user"]["email"] == "newcomer@example.com"
-    assert body["user"]["display_name"] == "Newcomer"
-    assert body["user"]["email_verified"] is True
+    assert body["user"]["displayName"] == "Newcomer"
+    assert body["user"]["emailVerified"] is True
 
     set_cookie = resp.headers.get("set-cookie", "")
     assert "refresh_token=" in set_cookie
@@ -165,14 +165,14 @@ def test_existing_user_signin_is_idempotent(
     builder_kwargs = {"sub": "google-sub-repeat", "aud": GOOGLE_AUD, "email": "r@example.com"}
     first = auth_client.post(
         "/api/auth/google/callback",
-        json={"id_token": google_id_token(**builder_kwargs)},
+        json={"idToken": google_id_token(**builder_kwargs)},
     )
     assert first.status_code == 200
     auth_client.cookies.clear()
 
     second = auth_client.post(
         "/api/auth/google/callback",
-        json={"id_token": google_id_token(**builder_kwargs)},
+        json={"idToken": google_id_token(**builder_kwargs)},
     )
     assert second.status_code == 200
 
@@ -211,7 +211,7 @@ def test_invalid_signature_returns_401(
     swapped = "A" if parts[2][0] != "A" else "B"
     bad = ".".join([parts[0], parts[1], swapped + parts[2][1:]])
 
-    resp = auth_client.post("/api/auth/google/callback", json={"id_token": bad})
+    resp = auth_client.post("/api/auth/google/callback", json={"idToken": bad})
 
     assert resp.status_code == 401
     body = resp.json()
@@ -233,7 +233,7 @@ def test_jwks_unreachable_returns_503(
     with_failing_jwks()
     resp = auth_client.post(
         "/api/auth/google/callback",
-        json={"id_token": google_id_token()},
+        json={"idToken": google_id_token()},
     )
     assert resp.status_code == 503
     assert resp.json()["detail"]["code"] == "jwks_unavailable"
@@ -256,7 +256,7 @@ def test_auth_disabled_returns_404(
     try:
         resp = auth_client.post(
             "/api/auth/google/callback",
-            json={"id_token": google_id_token(aud=GOOGLE_AUD)},
+            json={"idToken": google_id_token(aud=GOOGLE_AUD)},
         )
     finally:
         # Restore the auth-enabled override so subsequent tests in this
@@ -273,7 +273,7 @@ def test_truly_unknown_provider_returns_404_or_422(auth_client: TestClient) -> N
     """Anything outside the AuthProvider enum must not be silently routed."""
     resp = auth_client.post(
         "/api/auth/microsoft/callback",
-        json={"id_token": "anything"},
+        json={"idToken": "anything"},
     )
     # FastAPI's path-parameter Literal validation surfaces a 422; the OpenAPI
     # spec calls for 404. Both lock out the bad path; we accept either rather
@@ -322,14 +322,14 @@ def test_email_collision_with_other_provider_returns_link_required(
         name="Alice (Google)",
     )
 
-    resp = auth_client.post("/api/auth/google/callback", json={"id_token": token})
+    resp = auth_client.post("/api/auth/google/callback", json={"idToken": token})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is True
-    assert body["link_provider"] == "apple"
-    assert body["link_token"]
-    assert "access_token" not in body or body["access_token"] is None
+    assert body["linkRequired"] is True
+    assert body["linkProvider"] == "apple"
+    assert body["linkToken"]
+    assert "accessToken" not in body or body["accessToken"] is None
     assert "user" not in body or body["user"] is None
 
     # No refresh cookie on the link path.
@@ -354,7 +354,7 @@ def test_email_collision_with_other_provider_returns_link_required(
         jwt_signing_key="test-jwt-signing-key",
         link_token_ttl_seconds=600,
     )
-    claims = decode_link_token(body["link_token"], settings=test_settings)
+    claims = decode_link_token(body["linkToken"], settings=test_settings)
     assert claims.existing_user_id == apple_user_id
     assert claims.new_provider == "google"
     assert claims.new_provider_user_id == "google-sub-newcomer"
@@ -397,14 +397,14 @@ def test_unverified_email_does_not_trigger_link_required(
         name="Bob",
     )
 
-    resp = auth_client.post("/api/auth/google/callback", json={"id_token": token})
+    resp = auth_client.post("/api/auth/google/callback", json={"idToken": token})
 
     # Unverified email doesn't match — we treat as a brand-new Google user.
     assert resp.status_code == 200
     body = resp.json()
-    assert body["link_required"] is False
+    assert body["linkRequired"] is False
     assert body["user"]["provider"] == "google"
-    assert body["user"]["email_verified"] is False
+    assert body["user"]["emailVerified"] is False
 
     with engine.begin() as conn:
         google_count = conn.execute(

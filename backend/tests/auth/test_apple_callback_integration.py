@@ -241,18 +241,18 @@ def test_new_user_signin_with_real_email_creates_user_and_refresh_row(
 
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "ignored-by-this-pr", "name": "Newcomer"},
+        json={"idToken": token, "code": "ignored-by-this-pr", "name": "Newcomer"},
     )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False
-    assert body["access_token"]
-    assert body["expires_at"]
+    assert body["linkRequired"] is False
+    assert body["accessToken"]
+    assert body["expiresAt"]
     assert body["user"]["provider"] == "apple"
     assert body["user"]["email"] == "newcomer@example.com"
-    assert body["user"]["display_name"] == "Newcomer"
-    assert body["user"]["email_verified"] is True
+    assert body["user"]["displayName"] == "Newcomer"
+    assert body["user"]["emailVerified"] is True
 
     set_cookie = resp.headers.get("set-cookie", "")
     assert "refresh_token=" in set_cookie
@@ -301,15 +301,15 @@ def test_new_user_signin_with_relay_email_creates_account(
 
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "x", "name": "Relay User"},
+        json={"idToken": token, "code": "x", "name": "Relay User"},
     )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False
+    assert body["linkRequired"] is False
     assert body["user"]["provider"] == "apple"
     assert body["user"]["email"] == "abc123@privaterelay.appleid.com"
-    assert body["user"]["display_name"] == "Relay User"
+    assert body["user"]["displayName"] == "Relay User"
 
 
 def test_subsequent_signin_reuses_existing_user(
@@ -324,26 +324,26 @@ def test_subsequent_signin_reuses_existing_user(
     first = auth_client.post(
         "/api/auth/apple/callback",
         json={
-            "id_token": apple_id_token(**builder_kwargs),
+            "idToken": apple_id_token(**builder_kwargs),
             "code": "x",
             "name": "Original Name",
         },
     )
     assert first.status_code == 200
     first_user_id = first.json()["user"]["id"]
-    first_display_name = first.json()["user"]["display_name"]
+    first_display_name = first.json()["user"]["displayName"]
     assert first_display_name == "Original Name"
     auth_client.cookies.clear()
 
     # Second call: same user, no `name` (Apple drops it after the first auth).
     second = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": apple_id_token(**builder_kwargs), "code": "x"},
+        json={"idToken": apple_id_token(**builder_kwargs), "code": "x"},
     )
     assert second.status_code == 200
     second_body = second.json()
     assert second_body["user"]["id"] == first_user_id
-    assert second_body["user"]["display_name"] == "Original Name", (
+    assert second_body["user"]["displayName"] == "Original Name", (
         "subsequent sign-in must NOT overwrite display_name from a missing-name token"
     )
 
@@ -376,10 +376,10 @@ def test_first_signin_without_name_falls_back_to_email(
     token = apple_id_token(sub="apple-no-name-1", email="someone@example.com")
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "x"},
+        json={"idToken": token, "code": "x"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["user"]["display_name"] == "someone@example.com"
+    assert resp.json()["user"]["displayName"] == "someone@example.com"
 
 
 def test_first_signin_without_name_or_email_uses_default(
@@ -392,10 +392,10 @@ def test_first_signin_without_name_or_email_uses_default(
     token = apple_id_token(sub="apple-no-anything-1", email=None)
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "x"},
+        json={"idToken": token, "code": "x"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["user"]["display_name"] == "ThreadLoop user"
+    assert resp.json()["user"]["displayName"] == "ThreadLoop user"
 
 
 # ----- error paths ----------------------------------------------------------
@@ -413,7 +413,7 @@ def test_invalid_signature_returns_401(
 
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": bad, "code": "x"},
+        json={"idToken": bad, "code": "x"},
     )
 
     assert resp.status_code == 401
@@ -436,17 +436,17 @@ def test_jwks_unreachable_returns_503(
     with_failing_apple_jwks()
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": apple_id_token(), "code": "x"},
+        json={"idToken": apple_id_token(), "code": "x"},
     )
     assert resp.status_code == 503
     assert resp.json()["detail"]["code"] == "jwks_unavailable"
 
 
 def test_missing_required_field_returns_422(auth_client: TestClient) -> None:
-    """Apple body schema requires both `id_token` and `code`."""
+    """Apple body schema requires both `idToken` and `code`."""
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": "anything"},  # missing `code`
+        json={"idToken": "anything"},  # missing `code`
     )
     assert resp.status_code == 422
 
@@ -492,15 +492,15 @@ def test_email_collision_with_other_provider_returns_link_required(
 
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "x", "name": "Alice (Apple)"},
+        json={"idToken": token, "code": "x", "name": "Alice (Apple)"},
     )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is True
-    assert body["link_provider"] == "google"
-    assert body["link_token"]
-    assert body.get("access_token") is None
+    assert body["linkRequired"] is True
+    assert body["linkProvider"] == "google"
+    assert body["linkToken"]
+    assert body.get("accessToken") is None
     assert body.get("user") is None
 
     set_cookie = resp.headers.get("set-cookie", "")
@@ -523,7 +523,7 @@ def test_email_collision_with_other_provider_returns_link_required(
         jwt_signing_key="test-jwt-signing-key",
         link_token_ttl_seconds=600,
     )
-    claims = decode_link_token(body["link_token"], settings=test_settings)
+    claims = decode_link_token(body["linkToken"], settings=test_settings)
     assert claims.existing_user_id == google_user_id
     assert claims.new_provider == "apple"
     assert claims.new_provider_user_id == "apple-sub-newcomer"
@@ -575,12 +575,12 @@ def test_apple_relay_bypasses_link_required(
 
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "x", "name": "Bob (Apple)"},
+        json={"idToken": token, "code": "x", "name": "Bob (Apple)"},
     )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False, "is_private_email=true must bypass collision check"
+    assert body["linkRequired"] is False, "is_private_email=true must bypass collision check"
     assert body["user"]["provider"] == "apple"
     assert body["user"]["email"] == relay
 
@@ -630,11 +630,11 @@ def test_unverified_email_does_not_trigger_link_required(
 
     resp = auth_client.post(
         "/api/auth/apple/callback",
-        json={"id_token": token, "code": "x"},
+        json={"idToken": token, "code": "x"},
     )
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["link_required"] is False
+    assert body["linkRequired"] is False
     assert body["user"]["provider"] == "apple"
-    assert body["user"]["email_verified"] is False
+    assert body["user"]["emailVerified"] is False

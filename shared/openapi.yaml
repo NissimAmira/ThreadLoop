@@ -5,6 +5,14 @@ info:
   description: |
     Source-of-truth contract for the ThreadLoop marketplace API.
     The TypeScript types in `shared/src/types` mirror this spec.
+
+    Wire shape: **camelCase** for every JSON property (request bodies,
+    response shapes, query parameters). The backend uses Pydantic v2
+    `alias_generator=to_camel + populate_by_name=True +
+    serialize_by_alias=True` to derive these aliases from snake_case Python
+    attribute names. See ADR 0009 (`docs/adrs/0009-camelcase-on-the-wire.md`)
+    for the rationale and reversal path. SQL column names are unaffected
+    and remain snake_case.
 servers:
   - url: http://localhost:8000
     description: Local dev
@@ -38,16 +46,16 @@ paths:
       description: |
         Single endpoint that dispatches by `provider` path parameter.
         The request body shape varies by provider (see `SsoCallbackInput`):
-          - `google`:   `{ id_token }`
-          - `apple`:    `{ id_token, code, name? }`
-          - `facebook`: `{ access_token }`
+          - `google`:   `{ idToken }`
+          - `apple`:    `{ idToken, code, name? }`
+          - `facebook`: `{ accessToken }`
 
         On success, returns a `Session` and sets a `Set-Cookie: refresh_token=…`
         header (httpOnly, Secure, SameSite=Lax, 30-day rolling lifetime).
 
         On a verified-email collision with an existing account from a different
-        provider, returns `200` with `link_required: true` and a short-lived
-        `link_token`; the client should prompt the user to re-authenticate
+        provider, returns `200` with `linkRequired: true` and a short-lived
+        `linkToken`; the client should prompt the user to re-authenticate
         with the original provider to confirm linking.
       parameters:
         - in: path
@@ -62,7 +70,7 @@ paths:
       responses:
         "200":
           description: |
-            Session created (or pending-link state — see `link_required`).
+            Session created (or pending-link state — see `linkRequired`).
             Refresh token set as httpOnly cookie when not pending-link.
           content:
             application/json:
@@ -207,8 +215,8 @@ paths:
         - { in: query, name: category, schema: { type: string } }
         - { in: query, name: size, schema: { type: string } }
         - { in: query, name: condition, schema: { type: string, enum: [new, like_new, good, fair] } }
-        - { in: query, name: min_price, schema: { type: integer } }
-        - { in: query, name: max_price, schema: { type: integer } }
+        - { in: query, name: minPriceCents, schema: { type: integer } }
+        - { in: query, name: maxPriceCents, schema: { type: integer } }
         - { in: query, name: page, schema: { type: integer, default: 1 } }
       responses:
         "200":
@@ -228,9 +236,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [listing_id]
+              required: [listingId]
               properties:
-                listing_id: { type: string, format: uuid }
+                listingId: { type: string, format: uuid }
       responses:
         "201":
           description: Pending transaction created
@@ -266,7 +274,7 @@ components:
       properties:
         code:    { type: string, description: "Stable machine-readable error code." }
         message: { type: string, description: "Human-readable detail; safe to surface." }
-        request_id:
+        requestId:
           type: string
           description: "Server-assigned request id for log correlation."
 
@@ -276,16 +284,16 @@ components:
 
     GoogleSsoCallbackInput:
       type: object
-      required: [id_token]
+      required: [idToken]
       properties:
-        id_token: { type: string, description: "Google-issued ID token (JWT)." }
+        idToken: { type: string, description: "Google-issued ID token (JWT)." }
 
     AppleSsoCallbackInput:
       type: object
-      required: [id_token, code]
+      required: [idToken, code]
       properties:
-        id_token: { type: string, description: "Apple-issued ID token (JWT)." }
-        code:     { type: string, description: "Apple authorization code; used to redeem an Apple refresh token server-side." }
+        idToken: { type: string, description: "Apple-issued ID token (JWT)." }
+        code:    { type: string, description: "Apple authorization code; used to redeem an Apple refresh token server-side." }
         name:
           type: string
           nullable: true
@@ -297,9 +305,9 @@ components:
 
     FacebookSsoCallbackInput:
       type: object
-      required: [access_token]
+      required: [accessToken]
       properties:
-        access_token: { type: string, description: "Facebook user access token (resolved against Graph API server-side)." }
+        accessToken: { type: string, description: "Facebook user access token (resolved against Graph API server-side)." }
 
     SsoCallbackInput:
       description: |
@@ -312,52 +320,52 @@ components:
 
     User:
       type: object
-      required: [id, provider, display_name, email_verified, can_sell, can_purchase, created_at, updated_at]
+      required: [id, provider, displayName, emailVerified, canSell, canPurchase, createdAt, updatedAt]
       properties:
-        id:             { type: string, format: uuid }
-        provider:       { $ref: "#/components/schemas/AuthProvider" }
-        email:          { type: string, nullable: true, description: "May be null when Apple withholds the address." }
-        email_verified: { type: boolean }
-        display_name:   { type: string }
-        avatar_url:     { type: string, nullable: true, format: uri }
-        can_sell:       { type: boolean }
-        can_purchase:   { type: boolean }
-        seller_rating:  { type: number, nullable: true, minimum: 0, maximum: 5 }
-        created_at:     { type: string, format: date-time }
-        updated_at:     { type: string, format: date-time }
+        id:            { type: string, format: uuid }
+        provider:      { $ref: "#/components/schemas/AuthProvider" }
+        email:         { type: string, nullable: true, description: "May be null when Apple withholds the address." }
+        emailVerified: { type: boolean }
+        displayName:   { type: string }
+        avatarUrl:     { type: string, nullable: true, format: uri }
+        canSell:       { type: boolean }
+        canPurchase:   { type: boolean }
+        sellerRating:  { type: number, nullable: true, minimum: 0, maximum: 5 }
+        createdAt:     { type: string, format: date-time }
+        updatedAt:     { type: string, format: date-time }
 
     Session:
       type: object
       description: |
-        Result of a successful authentication. When `link_required` is `true`,
-        the existing-account collision flow has fired: `access_token`/`user`
+        Result of a successful authentication. When `linkRequired` is `true`,
+        the existing-account collision flow has fired: `accessToken`/`user`
         are absent and the client must surface a "sign in with {existing
-        provider} to link" prompt, then submit `link_token` alongside the
-        re-auth result. On the happy path, `link_required` is `false` (or
-        omitted) and `access_token`/`expires_at`/`user` are all present.
-      required: [link_required]
+        provider} to link" prompt, then submit `linkToken` alongside the
+        re-auth result. On the happy path, `linkRequired` is `false` (or
+        omitted) and `accessToken`/`expiresAt`/`user` are all present.
+      required: [linkRequired]
       properties:
-        access_token:
+        accessToken:
           type: string
-          description: "Short-lived (15 min) access JWT. Absent when link_required is true."
-        expires_at:
+          description: "Short-lived (15 min) access JWT. Absent when linkRequired is true."
+        expiresAt:
           type: string
           format: date-time
-          description: "Access token expiry. Absent when link_required is true."
+          description: "Access token expiry. Absent when linkRequired is true."
         user:
           allOf:
             - $ref: "#/components/schemas/User"
-          description: "Authenticated user. Absent when link_required is true."
-        link_required:
+          description: "Authenticated user. Absent when linkRequired is true."
+        linkRequired:
           type: boolean
           default: false
           description: "True when the email collides with an existing account from a different provider; client must prompt the user to re-authenticate with that provider to link."
-        link_provider:
+        linkProvider:
           $ref: "#/components/schemas/AuthProvider"
-          description: "Existing provider the user must re-authenticate with. Present iff link_required is true."
-        link_token:
+          description: "Existing provider the user must re-authenticate with. Present iff linkRequired is true."
+        linkToken:
           type: string
-          description: "Short-lived token submitted alongside the linking re-auth to confirm the merge. Present iff link_required is true."
+          description: "Short-lived token submitted alongside the linking re-auth to confirm the merge. Present iff linkRequired is true."
 
     ListingImage:
       type: object
@@ -371,36 +379,36 @@ components:
 
     ListingArAsset:
       type: object
-      required: [glb_low_url, glb_high_url]
+      required: [glbLowUrl, glbHighUrl]
       properties:
-        glb_low_url:  { type: string, format: uri }
-        glb_high_url: { type: string, format: uri }
-        processed_at: { type: string, format: date-time, nullable: true }
+        glbLowUrl:   { type: string, format: uri }
+        glbHighUrl:  { type: string, format: uri }
+        processedAt: { type: string, format: date-time, nullable: true }
 
     Listing:
       type: object
       required:
-        [id, seller_id, title, category, condition, price_cents, currency, status, images]
+        [id, sellerId, title, category, condition, priceCents, currency, status, images]
       properties:
         id:          { type: string, format: uuid }
-        seller_id:   { type: string, format: uuid }
+        sellerId:    { type: string, format: uuid }
         title:       { type: string }
         description: { type: string, nullable: true }
         brand:       { type: string, nullable: true }
         category:    { type: string }
         size:        { type: string, nullable: true }
         condition:   { type: string, enum: [new, like_new, good, fair] }
-        price_cents: { type: integer, minimum: 1 }
+        priceCents:  { type: integer, minimum: 1 }
         currency:    { type: string, minLength: 3, maxLength: 3 }
         status:      { type: string, enum: [draft, active, sold, removed] }
         images:      { type: array, items: { $ref: "#/components/schemas/ListingImage" } }
-        ar_asset:    { $ref: "#/components/schemas/ListingArAsset", nullable: true }
-        created_at:  { type: string, format: date-time }
-        updated_at:  { type: string, format: date-time }
+        arAsset:     { $ref: "#/components/schemas/ListingArAsset", nullable: true }
+        createdAt:   { type: string, format: date-time }
+        updatedAt:   { type: string, format: date-time }
 
     CreateListingInput:
       type: object
-      required: [title, category, condition, price_cents]
+      required: [title, category, condition, priceCents]
       properties:
         title:       { type: string, maxLength: 200 }
         description: { type: string }
@@ -408,19 +416,19 @@ components:
         category:    { type: string }
         size:        { type: string }
         condition:   { type: string, enum: [new, like_new, good, fair] }
-        price_cents: { type: integer, minimum: 1 }
+        priceCents:  { type: integer, minimum: 1 }
         currency:    { type: string, default: "USD" }
 
     ListingPage:
       type: object
-      required: [items, next_cursor]
+      required: [items, nextCursor]
       properties:
-        items:       { type: array, items: { $ref: "#/components/schemas/Listing" } }
-        next_cursor: { type: string, nullable: true }
+        items:      { type: array, items: { $ref: "#/components/schemas/Listing" } }
+        nextCursor: { type: string, nullable: true }
 
     SearchResult:
       type: object
-      required: [hits, facets, page, total_pages, total_hits]
+      required: [hits, facets, page, totalPages, totalHits]
       properties:
         hits:
           type: array
@@ -437,23 +445,23 @@ components:
             category:  { type: object, additionalProperties: { type: integer } }
             size:      { type: object, additionalProperties: { type: integer } }
             condition: { type: object, additionalProperties: { type: integer } }
-        page:        { type: integer }
-        total_pages: { type: integer }
-        total_hits:  { type: integer }
+        page:       { type: integer }
+        totalPages: { type: integer }
+        totalHits:  { type: integer }
 
     Transaction:
       type: object
       required:
-        [id, listing_id, buyer_id, seller_id, amount_cents, currency, status]
+        [id, listingId, buyerId, sellerId, amountCents, currency, status]
       properties:
-        id:           { type: string, format: uuid }
-        listing_id:   { type: string, format: uuid }
-        buyer_id:     { type: string, format: uuid }
-        seller_id:    { type: string, format: uuid }
-        amount_cents: { type: integer }
-        currency:     { type: string, minLength: 3, maxLength: 3 }
+        id:          { type: string, format: uuid }
+        listingId:   { type: string, format: uuid }
+        buyerId:     { type: string, format: uuid }
+        sellerId:    { type: string, format: uuid }
+        amountCents: { type: integer }
+        currency:    { type: string, minLength: 3, maxLength: 3 }
         status:
           type: string
           enum: [pending, paid, shipped, delivered, disputed, refunded]
-        created_at:   { type: string, format: date-time }
-        updated_at:   { type: string, format: date-time }
+        createdAt:   { type: string, format: date-time }
+        updatedAt:   { type: string, format: date-time }

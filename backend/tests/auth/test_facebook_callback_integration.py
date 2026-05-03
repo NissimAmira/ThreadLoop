@@ -159,19 +159,19 @@ def test_new_user_signin_with_email_creates_user_and_refresh_row(
 
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "EAA-fake-user-token"},
+        json={"accessToken": "EAA-fake-user-token"},
     )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False
-    assert body["access_token"]
-    assert body["expires_at"]
+    assert body["linkRequired"] is False
+    assert body["accessToken"]
+    assert body["expiresAt"]
     assert body["user"]["provider"] == "facebook"
     assert body["user"]["email"] == "newcomer@example.com"
-    assert body["user"]["display_name"] == "Newcomer"
-    assert body["user"]["email_verified"] is False
-    assert body["user"]["avatar_url"] == "https://cdn.fb/avatar.png"
+    assert body["user"]["displayName"] == "Newcomer"
+    assert body["user"]["emailVerified"] is False
+    assert body["user"]["avatarUrl"] == "https://cdn.fb/avatar.png"
 
     set_cookie = resp.headers.get("set-cookie", "")
     assert "refresh_token=" in set_cookie
@@ -221,15 +221,15 @@ def test_new_user_signin_without_email_creates_user(
     )
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "EAA-no-email"},
+        json={"accessToken": "EAA-no-email"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False
+    assert body["linkRequired"] is False
     # `response_model_exclude_none=True` strips null fields rather than
     # serialising them as JSON `null` — match Google / Apple's behaviour.
     assert body["user"].get("email") is None
-    assert body["user"]["display_name"] == "No Email Person"
+    assert body["user"]["displayName"] == "No Email Person"
 
 
 def test_new_user_signin_without_name_or_email_uses_default(
@@ -249,10 +249,10 @@ def test_new_user_signin_without_name_or_email_uses_default(
     )
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "EAA-bare"},
+        json={"accessToken": "EAA-bare"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["user"]["display_name"] == "ThreadLoop user"
+    assert resp.json()["user"]["displayName"] == "ThreadLoop user"
 
 
 def test_subsequent_signin_reuses_existing_user_without_overwrite(
@@ -275,11 +275,11 @@ def test_subsequent_signin_reuses_existing_user_without_overwrite(
     )
     first = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "first-call"},
+        json={"accessToken": "first-call"},
     )
     assert first.status_code == 200
     first_user_id = first.json()["user"]["id"]
-    assert first.json()["user"]["display_name"] == "Original Name"
+    assert first.json()["user"]["displayName"] == "Original Name"
     auth_client.cookies.clear()
 
     # Second call: same sub, but the verifier surfaces a different name.
@@ -294,12 +294,12 @@ def test_subsequent_signin_reuses_existing_user_without_overwrite(
     )
     second = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "second-call"},
+        json={"accessToken": "second-call"},
     )
     assert second.status_code == 200
     second_body = second.json()
     assert second_body["user"]["id"] == first_user_id
-    assert second_body["user"]["display_name"] == "Original Name", (
+    assert second_body["user"]["displayName"] == "Original Name", (
         "subsequent sign-in must NOT overwrite display_name"
     )
 
@@ -335,7 +335,7 @@ def test_invalid_token_returns_401(
 
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "bad"},
+        json={"accessToken": "bad"},
     )
     assert resp.status_code == 401
     body = resp.json()
@@ -359,7 +359,7 @@ def test_graph_api_unavailable_returns_503(
     stub_facebook_verifier(raises=GraphApiUnavailableError("Graph 502"))
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "anything"},
+        json={"accessToken": "anything"},
     )
     assert resp.status_code == 503
     assert resp.json()["detail"]["code"] == "graph_api_unavailable"
@@ -378,7 +378,7 @@ def test_empty_access_token_returns_422(auth_client: TestClient) -> None:
     """Pydantic min_length=1 enforces non-empty at the body schema layer."""
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": ""},
+        json={"accessToken": ""},
     )
     assert resp.status_code == 422
 
@@ -432,12 +432,12 @@ def test_email_collision_does_not_trigger_link_required_facebook(
 
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "anything"},
+        json={"accessToken": "anything"},
     )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False, (
+    assert body["linkRequired"] is False, (
         "Facebook email_verified is always False so collision check must NOT fire"
     )
     assert body["user"]["provider"] == "facebook"
@@ -495,12 +495,12 @@ def test_unverified_email_does_not_trigger_link_required(
 
     resp = auth_client.post(
         "/api/auth/facebook/callback",
-        json={"access_token": "anything"},
+        json={"accessToken": "anything"},
     )
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["link_required"] is False
+    assert body["linkRequired"] is False
     assert body["user"]["provider"] == "facebook"
-    assert body["user"]["email_verified"] is False
+    assert body["user"]["emailVerified"] is False
     engine.dispose()

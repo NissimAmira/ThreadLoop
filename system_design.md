@@ -188,13 +188,14 @@ The contract is `shared/openapi.yaml`. Summary:
 - `POST /api/auth/{provider}/callback` — single endpoint dispatched by the
   `provider` path parameter (`google` | `apple` | `facebook`). Per-provider
   request body:
-  - `google`:   `{ id_token }`
-  - `apple`:    `{ id_token, code }`
-  - `facebook`: `{ access_token }`
+  - `google`:   `{ idToken }`
+  - `apple`:    `{ idToken, code }`
+  - `facebook`: `{ accessToken }`
   Returns a `Session`. On verified-email collision with an existing account
-  from a different provider, returns `200` with `link_required: true` and a
-  short-lived `link_token`; `access_token`/`user` are absent in that state
-  and the client must surface the linking prompt.
+  from a different provider, returns `200` with `linkRequired: true` and a
+  short-lived `linkToken`; `accessToken`/`user` are absent in that state
+  and the client must surface the linking prompt. Wire shape is camelCase
+  per ADR 0009.
 - `POST /api/auth/refresh` — reads the `refresh_token` httpOnly cookie,
   rotates it server-side, returns a new access JWT. Reuse of a rotated
   token revokes all of that user's refresh tokens (likely theft) and
@@ -203,7 +204,7 @@ The contract is `shared/openapi.yaml`. Summary:
   the cookie. Idempotent (`204` even with no cookie).
 - `GET  /api/me` — returns the authenticated `User`.
 
-Errors use a uniform `{ code, message, request_id? }` envelope (`Error`
+Errors use a uniform `{ code, message, requestId? }` envelope (`Error`
 schema). Error statuses returned by these endpoints:
 
 - `400` malformed callback body (missing required field for provider).
@@ -225,10 +226,10 @@ schema). Error statuses returned by these endpoints:
 - `POST   /api/listings/:id/ar` — returns presigned upload URL for `.glb`
 
 ### Search
-- `GET /api/search?q=&brand=&category=&size=&min_price=&max_price=&condition=&page=` — Meilisearch-backed; returns hits + facets.
+- `GET /api/search?q=&brand=&category=&size=&minPriceCents=&maxPriceCents=&condition=&page=` — Meilisearch-backed; returns hits + facets.
 
 ### Transactions
-- `POST /api/transactions` `{ listing_id }` — creates pending purchase
+- `POST /api/transactions` `{ listingId }` — creates pending purchase
 - `GET  /api/transactions/:id`
 - `POST /api/transactions/:id/pay` — wires to payment provider (out of scope MVP, stubbed)
 - `POST /api/transactions/:id/ship` — seller marks shipped
