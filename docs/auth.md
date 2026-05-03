@@ -29,13 +29,65 @@ binary will look like once the flag is flipped. Both surfaces are gated
 identically: `/api/me` 404s under flag-off in lockstep with `/api/auth/*`
 so a probe can't tell the auth subsystem exists from the response.
 
-When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless all of
-`GOOGLE_CLIENT_ID`, `JWT_SIGNING_KEY`, `REFRESH_TOKEN_HMAC_KEY`,
-`APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`,
-`FACEBOOK_APP_ID`, and `FACEBOOK_APP_SECRET` are set non-empty. This catches
-the common misconfiguration where an unset provider secret would silently
-make every sign-in look like "your token is invalid" (401) when the real
-fault is server config.
+### Per-provider gating — `GOOGLE_ENABLED` / `APPLE_ENABLED` / `FACEBOOK_ENABLED`
+
+The master `AUTH_ENABLED` flag turns the subsystem on; three per-provider
+boolean flags decide which providers' callbacks are reachable within an
+auth-enabled deployment. Default is `false` for all three, mirroring
+Epic #11's slice-by-slice rollout: slice 1 ships Google end-to-end, slice 2
+broadens to Apple, slice 3 to Facebook. The split exists because the
+previous validator forced operators running a Google-only slice 1 demo to
+stuff dummy values into Apple and Facebook env vars just to boot — at
+which point the validator no longer caught the misconfiguration it was
+designed to (issue #51).
+
+Behaviour matrix:
+
+| `AUTH_ENABLED` | `<PROVIDER>_ENABLED` | `POST /api/auth/<provider>/callback` |
+| --- | --- | --- |
+| `false` | (any) | 404 (master gate) |
+| `true` | `false` | 404 (per-provider gate) |
+| `true` | `true` | runs |
+
+Both 404s carry the bare FastAPI `{"detail": "Not Found"}` envelope, so a
+probe can't distinguish the master flag-off state from a per-provider
+flag-off state. Per-provider gating runs **before** body validation in
+the dispatcher: a 422 for a malformed body of a disabled provider would
+leak the contract surface, so the disabled-provider 404 wins.
+
+> **Adding a fourth provider** requires updating three places in lockstep,
+> in the same commit: the `Literal[...]` type on the dispatcher's path
+> parameter in `app/routers/auth.py`, the `_KNOWN_PROVIDERS` frozenset in
+> the same file, and a new `<provider>_enabled` flag on `Settings` (with a
+> matching entry in `_PROVIDER_FLAG_ATTR` in `app/auth/deps.py`). Half-
+> adding a provider — e.g. landing the Settings flag without the dispatcher
+> Literal — produces a routing surface that disagrees with what the gate
+> actually checks.
+
+`/api/me`, `/api/auth/refresh`, and `/api/auth/logout` are provider-
+agnostic — they're gated only by the master `AUTH_ENABLED` flag.
+
+When `AUTH_ENABLED=true`, `Settings()` refuses to construct unless the
+**cross-cutting** secrets `JWT_SIGNING_KEY` and `REFRESH_TOKEN_HMAC_KEY`
+are set non-empty (every provider's session helpers reach for them). For
+each per-provider flag set to `true`, the validator additionally requires
+that provider's secrets:
+
+- `GOOGLE_ENABLED=true` → `GOOGLE_CLIENT_ID`.
+- `APPLE_ENABLED=true` → `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`,
+  `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`.
+- `FACEBOOK_ENABLED=true` → `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`.
+
+The validator catches the misconfiguration where an unset provider secret
+would silently make every sign-in look like "your token is invalid" (401)
+when the real fault is server config. Per-provider gating preserves the
+loud-fail property for whichever providers ARE enabled, and lets a
+slice-1 demo boot with only `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true`
++ the cross-cutting secrets + `GOOGLE_CLIENT_ID` set.
+
+Settings is loaded at boot — there is no runtime hot-toggle. Flipping a
+provider on or off requires a process restart, matching the master flag's
+semantics.
 
 Rollout sequence (RFC 0001):
 1. Implementation lands flag-off.
@@ -43,6 +95,10 @@ Rollout sequence (RFC 0001):
 3. Flag flipped on in **staging** (Phase 2 of the DevOps roadmap).
 4. Mobile sign-in lands flag-off.
 5. Flag flipped on in **prod** once all three platforms validate in staging.
+
+Per-provider flags follow the same staging-before-prod cadence: slice N's
+`<PROVIDER>_ENABLED=true` lands in staging first, gets validated, then
+flips in production.
 
 ## Supported providers
 
@@ -401,8 +457,9 @@ the security guarantee comes from two server-side calls to the Graph API.
   upstream verifier message — it can carry token contents.
 - **Unconfigured Facebook secrets.** As with Google and Apple, the verifier
   raises rather than silently accepting any token; `Settings()` refuses to
-  construct with `auth_enabled=True` and an empty `FACEBOOK_APP_ID` or
-  `FACEBOOK_APP_SECRET`.
+  construct with `facebook_enabled=True` and an empty `FACEBOOK_APP_ID` or
+  `FACEBOOK_APP_SECRET`. (Under `facebook_enabled=False`, Facebook secrets
+  are optional and the callback returns 404.)
 
 ## Buyer/seller dual role
 

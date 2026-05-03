@@ -269,6 +269,39 @@ def test_auth_disabled_returns_404(
     assert resp.status_code == 404
 
 
+def test_google_disabled_returns_404(
+    auth_client: TestClient,
+    google_id_token: Callable[..., str],
+) -> None:
+    """Per-provider gating (#51): with `AUTH_ENABLED=true` but
+    `GOOGLE_ENABLED=false`, the Google callback returns 404 with the same
+    envelope as the master `AUTH_ENABLED=false` 404 path. Apple/Facebook
+    flags can still be on independently."""
+    test_settings = make_test_settings(
+        database_url="postgresql+psycopg://x:x@nope/x",
+        google_client_id=GOOGLE_AUD,
+        google_enabled=False,
+        refresh_cookie_secure=False,
+    )
+    # Capture the prior override (set by the `auth_client` fixture) so the
+    # `finally` restores the *exact* settings object the fixture installed,
+    # rather than building a fresh `make_test_settings(...)` that drifts as
+    # the factory's defaults change.
+    prev_override = app.dependency_overrides.get(get_settings)
+    app.dependency_overrides[get_settings] = lambda: test_settings
+    try:
+        resp = auth_client.post(
+            "/api/auth/google/callback",
+            json={"idToken": google_id_token(aud=GOOGLE_AUD)},
+        )
+    finally:
+        if prev_override is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prev_override
+    assert resp.status_code == 404
+
+
 def test_truly_unknown_provider_returns_404_or_422(auth_client: TestClient) -> None:
     """Anything outside the AuthProvider enum must not be silently routed."""
     resp = auth_client.post(

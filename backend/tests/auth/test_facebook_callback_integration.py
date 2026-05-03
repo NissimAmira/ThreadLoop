@@ -383,6 +383,44 @@ def test_empty_access_token_returns_422(auth_client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_facebook_disabled_returns_404(auth_client: TestClient) -> None:
+    """Per-provider gating (#51): with `AUTH_ENABLED=true` but
+    `FACEBOOK_ENABLED=false`, the Facebook callback returns 404. The 404
+    wins over the body validator — a malformed body for a disabled
+    provider must not produce a 422 that leaks the contract surface."""
+    test_settings = make_test_settings(
+        database_url="postgresql+psycopg://x:x@nope/x",
+        facebook_app_id=FB_APP_ID,
+        facebook_app_secret=FB_APP_SECRET,
+        facebook_enabled=False,
+        refresh_cookie_secure=False,
+    )
+    # Capture the prior override (set by the `auth_client` fixture) so the
+    # `finally` restores the *exact* settings object the fixture installed,
+    # rather than building a fresh `make_test_settings(...)` that drifts as
+    # the factory's defaults change.
+    prev_override = app.dependency_overrides.get(get_settings)
+    app.dependency_overrides[get_settings] = lambda: test_settings
+    try:
+        resp = auth_client.post(
+            "/api/auth/facebook/callback",
+            json={"accessToken": "EAA-fake"},
+        )
+        # Even a malformed body must 404, not 422 — the per-provider gate
+        # runs before body validation.
+        bad_body_resp = auth_client.post(
+            "/api/auth/facebook/callback",
+            json={},
+        )
+    finally:
+        if prev_override is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prev_override
+    assert resp.status_code == 404
+    assert bad_body_resp.status_code == 404
+
+
 # ----- account-linking detection (Facebook specifics) -----------------------
 
 

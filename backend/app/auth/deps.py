@@ -41,6 +41,21 @@ logger = logging.getLogger(__name__)
 # link tokens (which share the signing key) presented as bearer credentials.
 _ACCESS_TOKEN_TYP = "access"
 
+# Maps `provider` (the path-parameter value the dispatcher resolves) to the
+# Settings attribute that holds its enabled flag. Looked up by key (not
+# `getattr` on a string-built attribute name) so a typo at a future call-site
+# surfaces as a `KeyError` here instead of silently degrading to the
+# `getattr` default. The `_KNOWN_PROVIDERS` membership check upstream in
+# `app.routers.auth.sso_callback` already keeps unknown providers from
+# reaching this function — that guard plus this dict means the only way to
+# raise `KeyError` is to add a fourth provider somewhere without updating
+# this map, which is exactly the failure we want to surface loudly.
+_PROVIDER_FLAG_ATTR: dict[str, str] = {
+    "google": "google_enabled",
+    "apple": "apple_enabled",
+    "facebook": "facebook_enabled",
+}
+
 
 def require_auth_enabled(
     settings: Annotated[Settings, Depends(get_settings)],
@@ -57,6 +72,24 @@ def require_auth_enabled(
     response, same dep.
     """
     if not settings.auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
+def require_provider_enabled(provider: str, settings: Settings) -> None:
+    """Gate a single provider's callback. Returns 404 (matching
+    `require_auth_enabled`'s envelope — bare HTTPException with no detail
+    body, which FastAPI surfaces as `{"detail": "Not Found"}`) when that
+    provider's `*_enabled` flag is False.
+
+    Not a FastAPI dependency (no `Depends(...)`) because it's called from
+    inside `sso_callback` after the dispatcher has resolved which provider
+    is being requested — we need the provider name as a runtime argument,
+    not a binding. Matching the master 404 envelope keeps the surface
+    indistinguishable to a probe regardless of whether the master flag or
+    the per-provider flag is the one tripped (issue #51).
+    """
+    flag_attr = _PROVIDER_FLAG_ATTR[provider]
+    if not getattr(settings, flag_attr):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 

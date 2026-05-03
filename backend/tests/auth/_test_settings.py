@@ -44,6 +44,13 @@ def make_test_settings(**overrides: Any) -> Settings:
     """
     defaults: dict[str, Any] = {
         "auth_enabled": True,
+        # Per-provider flags default to True so existing integration tests
+        # that exercise each provider's callback don't have to opt in
+        # individually. Tests that want to assert the disabled-provider 404
+        # path pass e.g. `apple_enabled=False` as an override.
+        "google_enabled": True,
+        "apple_enabled": True,
+        "facebook_enabled": True,
         "jwt_signing_key": "test-jwt-signing-key",
         "refresh_token_hmac_key": "test-hmac-key",
         "google_client_id": "test-google-client-id.apps.googleusercontent.com",
