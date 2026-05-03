@@ -31,15 +31,37 @@ monorepo. Every user is both buyer and seller. SSO-only authentication
 The infrastructure setup is complete and `v1.2.0` shipped: monorepo scaffold,
 health-check flow, CI gating, branch protection, release-please with a
 GitHub App, production Dockerfiles, phased DevOps roadmap, docs-as-part-of-done
-policy, local CR subagent, **task management via GitHub Projects + RFC/ADR
-conventions, and a multi-agent dev cycle simulating a real product team** (this
-is the most recent addition — see "How the dev cycle works" below).
+policy, local CR subagent, task management via GitHub Projects + RFC/ADR
+conventions, and a multi-agent dev cycle simulating a real product team.
 
-The product features (auth, listings, search, transactions, AR viewer) have
-**schemas and design docs but no implementation yet** — each domain doc has a
-"What's not implemented yet" section that calls this out. The next planned
-workstream is `feat/auth-sso` (RFC at `docs/rfcs/0001-auth-sso.md`), which
-will be the first real feature driven through the multi-agent cycle.
+**Auth (Epic #11) is partially shipped — slice 1 (Google web end-to-end) is
+live.** A user can hit `/sign-in`, sign in with Google, land on `/me` showing
+their display name, refresh, and log out. What's in main today:
+
+- All three provider callbacks on the backend (`POST /api/auth/{google,apple,facebook}/callback`)
+  with provider-specific verifiers (Google + Apple JWKS, Facebook Graph API
+  `/debug_token`).
+- Session middleware: `POST /api/auth/refresh` (rotation + reuse-detection),
+  `POST /api/auth/logout` (idempotent), `GET /api/me`, `require_user` bearer-JWT dep.
+- `refresh_tokens` table with HMAC-SHA-256-hashed-at-rest tokens, 30-day TTL,
+  cascade-on-user-delete.
+- Web: `/sign-in` page with the Google button (Google Identity Services SDK),
+  `/me` page, `useAuth()` context with silent-refresh on first paint, Cypress
+  smoke covering the full Google flow.
+- Wire shape: **camelCase end-to-end** (Pydantic `alias_generator=to_camel`,
+  see [ADR 0009](./docs/adrs/0009-camelcase-on-the-wire.md)). The shared TS
+  types in `@threadloop/shared` are consumed directly by the web client with
+  no per-endpoint adapter.
+
+**Still pending in Epic #11:** Apple sign-in button on web (#38), Facebook
+button on web (#39), full `link_required` linking UI (#40 + BE #18), and the
+mobile SDK integrations (#20). Slice-by-slice rollout per RFC 0001; see
+[`docs/auth.md`](./docs/auth.md) "What's not implemented yet" for the full
+list and `feat/auth-sso` Epic #11 for issue tracking.
+
+**Other product features** (listings, search, transactions, AR viewer) still
+have **schemas and design docs but no implementation yet** — each domain doc
+calls this out under "What's not implemented yet."
 
 ## How the dev cycle works
 

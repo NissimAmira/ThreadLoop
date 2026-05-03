@@ -1,10 +1,18 @@
 # RFC 0001: SSO authentication (Google / Apple / Facebook)
 
-- **Status:** Draft
+- **Status:** Partially implemented (slice 1 live; slices 2–5 in flight)
 - **Author:** Nissim
 - **Created:** 2026-04-30
-- **Approved:** —
-- **Tracking issue:** #<TBD — created with this RFC>
+- **Approved:** 2026-04-30
+- **Tracking issue:** #11 (Epic)
+- **Slice 1 shipped:** 2026-05-03 — Google web sign-in end-to-end
+  (PR #43 FE + PR #41 BE + PR #47 wire shape; ADR 0009 captures the
+  camelCase wire decision). See `docs/auth.md` "Already landed" for
+  the per-PR breakdown.
+- **Remaining slices:** Apple web button (#38), Facebook web button
+  (#39), `link_required` UI flow (#40, paired with BE #18), mobile
+  SDK integration (#20). RFC scope is unchanged; rollout proceeds
+  per the slice-by-slice plan below.
 
 ## TL;DR
 
