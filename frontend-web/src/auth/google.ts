@@ -74,30 +74,33 @@ export function loadGoogleIdentity(): Promise<GoogleIdApi> {
   if (loaderPromise) return loaderPromise;
 
   loaderPromise = new Promise<GoogleIdApi>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GIS_SRC}"]`);
-    const script = existing ?? document.createElement("script");
+    const script = document.createElement("script");
     script.src = GIS_SRC;
     script.async = true;
     script.defer = true;
 
-    const onLoad = () => {
-      const api = window.google?.accounts?.id;
-      if (!api) {
-        reject(new Error("Google Identity Services script loaded but window.google.accounts.id is missing"));
-        return;
-      }
-      resolve(api);
-    };
-    const onError = () => {
-      loaderPromise = null;
-      reject(new Error("Failed to load Google Identity Services"));
-    };
+    script.addEventListener(
+      "load",
+      () => {
+        const api = window.google?.accounts?.id;
+        if (!api) {
+          reject(new Error("Google Identity Services script loaded but window.google.accounts.id is missing"));
+          return;
+        }
+        resolve(api);
+      },
+      { once: true },
+    );
+    script.addEventListener(
+      "error",
+      () => {
+        loaderPromise = null;
+        reject(new Error("Failed to load Google Identity Services"));
+      },
+      { once: true },
+    );
 
-    script.addEventListener("load", onLoad, { once: true });
-    script.addEventListener("error", onError, { once: true });
-
-    if (!existing) document.head.appendChild(script);
-    else if (window.google?.accounts?.id) onLoad();
+    document.head.appendChild(script);
   });
 
   return loaderPromise;

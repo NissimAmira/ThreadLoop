@@ -74,6 +74,30 @@ export function SignInPage() {
     [signIn, navigate, next],
   );
 
+  const initAndRender = useCallback(
+    (gis: Awaited<ReturnType<typeof loadGoogleIdentity>>) => {
+      gis.initialize({
+        client_id: GOOGLE_CLIENT_ID || "stub-client-id",
+        callback: (resp) => {
+          void handleCredential(resp);
+        },
+        ux_mode: "popup",
+      });
+      if (buttonContainerRef.current) {
+        buttonContainerRef.current.replaceChildren();
+        gis.renderButton(buttonContainerRef.current, {
+          type: "standard",
+          theme: "outline",
+          size: "large",
+          text: "signin_with",
+          shape: "rectangular",
+          logo_alignment: "left",
+        });
+      }
+    },
+    [handleCredential],
+  );
+
   useEffect(() => {
     if (state.status !== "anonymous" && state.status !== "loading") return;
     let cancelled = false;
@@ -88,24 +112,7 @@ export function SignInPage() {
           );
           return;
         }
-        gis.initialize({
-          client_id: GOOGLE_CLIENT_ID || "stub-client-id",
-          callback: (resp) => {
-            void handleCredential(resp);
-          },
-          ux_mode: "popup",
-        });
-        if (buttonContainerRef.current) {
-          buttonContainerRef.current.replaceChildren();
-          gis.renderButton(buttonContainerRef.current, {
-            type: "standard",
-            theme: "outline",
-            size: "large",
-            text: "signin_with",
-            shape: "rectangular",
-            logo_alignment: "left",
-          });
-        }
+        initAndRender(gis);
         setStatus("ready");
       })
       .catch((err: unknown) => {
@@ -120,28 +127,21 @@ export function SignInPage() {
     return () => {
       cancelled = true;
     };
-  }, [state.status, handleCredential]);
+  }, [state.status, initAndRender]);
 
   const retry = useCallback(() => {
     setError(null);
     setStatus("loading-sdk");
     loadGoogleIdentity()
       .then((gis) => {
-        if (buttonContainerRef.current) {
-          buttonContainerRef.current.replaceChildren();
-          gis.renderButton(buttonContainerRef.current, {
-            type: "standard",
-            theme: "outline",
-            size: "large",
-          });
-        }
+        initAndRender(gis);
         setStatus("ready");
       })
       .catch(() => {
         setStatus("error");
         setError("Could not load Google sign-in. Please retry.");
       });
-  }, []);
+  }, [initAndRender]);
 
   return (
     <main className="flex-1 max-w-md mx-auto w-full px-6 py-16">
@@ -189,6 +189,7 @@ export function SignInPage() {
           </button>
         )}
 
+        {/* TODO(slice-2/#38): wire Apple + Facebook buttons here. */}
         <p className="mt-8 text-xs text-neutral-500">
           Apple and Facebook sign-in are coming soon.
         </p>
