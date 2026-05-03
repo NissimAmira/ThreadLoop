@@ -119,7 +119,11 @@ function userFromWire(w: UserWire): User {
 function sessionFromWire(w: SessionWire): Session {
   if (w.link_required) {
     if (!w.link_provider || !w.link_token) {
-      throw new ApiError(500, "Malformed link_required response", "malformed_response");
+      // status 0 = client-side contract violation, distinguishable from a real
+      // backend 5xx. Pair it with the malformed_response code so callers can
+      // distinguish "the server returned 500" from "the server's 200 was missing
+      // required fields" without string-matching messages.
+      throw new ApiError(0, "Malformed link_required response", "malformed_response");
     }
     const pending: PendingLinkSession = {
       linkRequired: true,
@@ -129,7 +133,7 @@ function sessionFromWire(w: SessionWire): Session {
     return pending;
   }
   if (!w.access_token || !w.expires_at || !w.user) {
-    throw new ApiError(500, "Malformed session response", "malformed_response");
+    throw new ApiError(0, "Malformed session response", "malformed_response");
   }
   const ok: AuthenticatedSession = {
     linkRequired: false,

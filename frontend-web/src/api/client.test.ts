@@ -99,4 +99,32 @@ describe("api client", () => {
     expect(e.code).toBe("jwks_unavailable");
     expect(e.name).toBe("ApiError");
   });
+
+  it("flags a malformed authenticated session with status 0 + code malformed_response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ link_required: false, access_token: "x" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    await expect(api.auth.googleCallback("id-token-from-google")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 0,
+      code: "malformed_response",
+    });
+  });
+
+  it("flags a malformed link_required response with status 0 + code malformed_response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ link_required: true }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    await expect(api.auth.googleCallback("id-token-from-google")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 0,
+      code: "malformed_response",
+    });
+  });
 });
