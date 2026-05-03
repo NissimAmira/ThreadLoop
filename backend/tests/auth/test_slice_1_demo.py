@@ -129,11 +129,11 @@ def test_slice_1_demo_signin_to_logout_full_loop(
         email="slice1@example.com",
         name="Slice One",
     )
-    signin = auth_client.post("/api/auth/google/callback", json={"id_token": token})
+    signin = auth_client.post("/api/auth/google/callback", json={"idToken": token})
     assert signin.status_code == 200, signin.text
     body = signin.json()
-    assert body["link_required"] is False
-    initial_access_token: str = body["access_token"]
+    assert body["linkRequired"] is False
+    initial_access_token: str = body["accessToken"]
     user_id: str = body["user"]["id"]
     initial_refresh_cookie = _set_cookie_value(signin.headers, "refresh_token")
     assert initial_refresh_cookie is not None, "callback must set the refresh cookie"
@@ -143,7 +143,7 @@ def test_slice_1_demo_signin_to_logout_full_loop(
     me1 = auth_client.get("/api/me", headers={"Authorization": f"Bearer {initial_access_token}"})
     assert me1.status_code == 200, me1.text
     assert me1.json()["id"] == user_id
-    assert me1.json()["display_name"] == "Slice One"
+    assert me1.json()["displayName"] == "Slice One"
 
     # Step 3: rotate via /api/auth/refresh. Cookie comes back fresh and
     # the body has a new access JWT. We send the cookie explicitly per
@@ -153,7 +153,7 @@ def test_slice_1_demo_signin_to_logout_full_loop(
         cookies={"refresh_token": initial_refresh_cookie},
     )
     assert refresh.status_code == 200, refresh.text
-    new_access_token: str = refresh.json()["access_token"]
+    new_access_token: str = refresh.json()["accessToken"]
     # `jti` (a fresh UUID per mint) makes the two access JWTs byte-distinct
     # even within the same wall-clock second, so we can assert rotation
     # directly across the refresh boundary.

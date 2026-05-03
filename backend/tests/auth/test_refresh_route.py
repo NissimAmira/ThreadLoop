@@ -185,9 +185,9 @@ def test_refresh_rotates_token_and_returns_session(auth_client: TestClient, pg_u
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["link_required"] is False
-    assert body["access_token"]
-    assert body["expires_at"]
+    assert body["linkRequired"] is False
+    assert body["accessToken"]
+    assert body["expiresAt"]
     assert body["user"]["id"] == str(user_id)
 
     # Cookie was rotated — read directly from the Set-Cookie header to avoid
@@ -473,4 +473,4 @@ def test_refresh_with_expired_access_jwt_succeeds_via_refresh_cookie(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["access_token"] != expired_jwt
+    assert body["accessToken"] != expired_jwt

@@ -3,10 +3,10 @@ from typing import Literal
 import httpx
 import redis
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.auth.schemas import WireBase
 from app.config import Settings, get_settings
 from app.db import get_db
 
@@ -15,7 +15,12 @@ router = APIRouter(tags=["health"])
 DependencyStatus = Literal["ok", "degraded", "down"]
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(WireBase):
+    """All single-word fields today, so the camelCase alias is a no-op on the
+    wire. Subclassing `WireBase` anyway keeps the convention uniform: a future
+    multi-word field (`uptimeSeconds`, etc.) inherits the right config without
+    a one-off edit."""
+
     status: DependencyStatus
     version: str
     db: DependencyStatus

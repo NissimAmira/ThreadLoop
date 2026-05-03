@@ -147,9 +147,9 @@ def test_me_returns_user_for_valid_bearer(auth_client: TestClient, pg_url: str) 
     assert body["id"] == str(user.id)
     assert body["provider"] == "google"
     assert body["email"] is not None
-    assert body["email_verified"] is True
-    assert body["can_sell"] is False
-    assert body["can_purchase"] is True
+    assert body["emailVerified"] is True
+    assert body["canSell"] is False
+    assert body["canPurchase"] is True
 
 
 # ----- failure modes --------------------------------------------------------

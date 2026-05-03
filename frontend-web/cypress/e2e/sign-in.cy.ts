@@ -12,24 +12,26 @@
 
 import type { GoogleCredentialResponse, GoogleIdApi } from "../../src/auth/google";
 
+// Wire is camelCase per ADR 0009 — keys here mirror what the backend
+// actually serializes (no FE adapter to translate snake_case anymore).
 const wireUser = {
   id: "00000000-0000-0000-0000-000000000001",
   provider: "google",
   email: "ada@example.com",
-  email_verified: true,
-  display_name: "Ada Lovelace",
-  avatar_url: null,
-  can_sell: false,
-  can_purchase: true,
-  seller_rating: null,
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-01T00:00:00Z",
+  emailVerified: true,
+  displayName: "Ada Lovelace",
+  avatarUrl: null,
+  canSell: false,
+  canPurchase: true,
+  sellerRating: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
 };
 
 const wireSession = {
-  link_required: false,
-  access_token: "stub-access-jwt",
-  expires_at: "2030-01-01T00:00:00Z",
+  linkRequired: false,
+  accessToken: "stub-access-jwt",
+  expiresAt: "2030-01-01T00:00:00Z",
   user: wireUser,
 };
 
@@ -80,7 +82,7 @@ describe("ThreadLoop sign-in (slice 1: Google)", () => {
     cy.get('[data-cy="google-signin-stub-button"]').should("be.visible").click();
 
     cy.wait("@googleCallback").its("request.body").should("deep.equal", {
-      id_token: "stub-google-id-token",
+      idToken: "stub-google-id-token",
     });
 
     cy.location("pathname").should("eq", "/me");
@@ -89,10 +91,10 @@ describe("ThreadLoop sign-in (slice 1: Google)", () => {
     cy.get('[data-testid="app-header-display-name"]').should("have.text", "Ada Lovelace");
   });
 
-  it("link_required response shows a generic error instead of redirecting", () => {
+  it("linkRequired response shows a generic error instead of redirecting", () => {
     cy.intercept("POST", "/api/auth/google/callback", {
       statusCode: 200,
-      body: { link_required: true, link_provider: "apple", link_token: "link-jwt" },
+      body: { linkRequired: true, linkProvider: "apple", linkToken: "link-jwt" },
     }).as("googleCallbackLink");
 
     cy.visit("/sign-in", {
