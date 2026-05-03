@@ -283,6 +283,11 @@ def test_google_disabled_returns_404(
         google_enabled=False,
         refresh_cookie_secure=False,
     )
+    # Capture the prior override (set by the `auth_client` fixture) so the
+    # `finally` restores the *exact* settings object the fixture installed,
+    # rather than building a fresh `make_test_settings(...)` that drifts as
+    # the factory's defaults change.
+    prev_override = app.dependency_overrides.get(get_settings)
     app.dependency_overrides[get_settings] = lambda: test_settings
     try:
         resp = auth_client.post(
@@ -290,13 +295,10 @@ def test_google_disabled_returns_404(
             json={"idToken": google_id_token(aud=GOOGLE_AUD)},
         )
     finally:
-        # Restore the auth-enabled (all providers on) override so subsequent
-        # tests in this session see the auth_client default.
-        app.dependency_overrides[get_settings] = lambda: make_test_settings(
-            database_url=test_settings.database_url,
-            google_client_id=GOOGLE_AUD,
-            refresh_cookie_secure=False,
-        )
+        if prev_override is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prev_override
     assert resp.status_code == 404
 
 

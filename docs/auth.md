@@ -55,6 +55,15 @@ flag-off state. Per-provider gating runs **before** body validation in
 the dispatcher: a 422 for a malformed body of a disabled provider would
 leak the contract surface, so the disabled-provider 404 wins.
 
+> **Adding a fourth provider** requires updating three places in lockstep,
+> in the same commit: the `Literal[...]` type on the dispatcher's path
+> parameter in `app/routers/auth.py`, the `_KNOWN_PROVIDERS` frozenset in
+> the same file, and a new `<provider>_enabled` flag on `Settings` (with a
+> matching entry in `_PROVIDER_FLAG_ATTR` in `app/auth/deps.py`). Half-
+> adding a provider — e.g. landing the Settings flag without the dispatcher
+> Literal — produces a routing surface that disagrees with what the gate
+> actually checks.
+
 `/api/me`, `/api/auth/refresh`, and `/api/auth/logout` are provider-
 agnostic — they're gated only by the master `AUTH_ENABLED` flag.
 

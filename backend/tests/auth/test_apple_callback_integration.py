@@ -469,6 +469,11 @@ def test_apple_disabled_returns_404(
         apple_enabled=False,
         refresh_cookie_secure=False,
     )
+    # Capture the prior override (set by the `auth_client` fixture) so the
+    # `finally` restores the *exact* settings object the fixture installed,
+    # rather than building a fresh `make_test_settings(...)` that drifts as
+    # the factory's defaults change.
+    prev_override = app.dependency_overrides.get(get_settings)
     app.dependency_overrides[get_settings] = lambda: test_settings
     try:
         resp = auth_client.post(
@@ -482,14 +487,10 @@ def test_apple_disabled_returns_404(
             json={"completely": "wrong"},
         )
     finally:
-        app.dependency_overrides[get_settings] = lambda: make_test_settings(
-            database_url=test_settings.database_url,
-            apple_client_id=APPLE_AUD,
-            apple_team_id=APPLE_TEAM,
-            apple_key_id=APPLE_KID,
-            apple_private_key=apple_p8_pem,
-            refresh_cookie_secure=False,
-        )
+        if prev_override is None:
+            app.dependency_overrides.pop(get_settings, None)
+        else:
+            app.dependency_overrides[get_settings] = prev_override
     assert resp.status_code == 404
     assert bad_body_resp.status_code == 404
 
