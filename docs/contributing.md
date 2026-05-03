@@ -69,13 +69,25 @@ agent has a `## Push back when…` section; `cr` surfaces unaddressed
    task's AC, the project rubric, **and** scans the linked task / Epic
    / PR for unaddressed advisory pushback. Address `must_fix` before
    merge.
-7. **Merge.** release-please will eventually cut a versioned release.
+7. **Closing PR — run the session-handoff checklist.** If this PR is
+   the one that closes the parent Epic (it satisfies the last
+   unchecked AC), the same PR must update the orientation surface a
+   fresh Claude Code session reads at boot: README roadmap tick,
+   `CLAUDE.md` "What's actually built vs designed," relevant
+   `docs/<topic>.md` "What's not implemented yet" lists,
+   `system_design.md`, and the RFC status line. Full checklist in
+   [`CLAUDE.md` § "Ending an Epic — session handoff"](../CLAUDE.md#ending-an-epic--session-handoff).
+   `cr` flags missing items as `must_fix` on Epic-closing PRs.
+8. **Merge + release.** release-please holds an open PR per the
+   per-Epic cadence rule (see § "Releases" below). When the Epic
+   closes, merge the release-please PR aligned with it.
 
 If a feature is small enough that this multi-step flow feels heavy
 (e.g., adding a single CRUD endpoint that follows existing patterns),
 skip the RFC and the advisory steps, open the Epic + tasks directly,
 and proceed. The `cr` agent will not flag the missing RFC or skipped
-advisory review for trivial changes.
+advisory review for trivial changes — but the session-handoff rule
+still applies on the closing PR if there is an Epic to close.
 
 ### The technical work inside any backend feature
 
