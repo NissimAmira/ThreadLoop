@@ -55,9 +55,13 @@ their display name, refresh, and log out. What's in main today:
 
 **Still pending in Epic #11:** Apple sign-in button on web (#38), Facebook
 button on web (#39), full `link_required` linking UI (#40 + BE #18), and the
-mobile SDK integrations (#20). Slice-by-slice rollout per RFC 0001; see
-[`docs/auth.md`](./docs/auth.md) "What's not implemented yet" for the full
-list and `feat/auth-sso` Epic #11 for issue tracking.
+mobile SDK integrations (#20). Slice-by-slice rollout per RFC 0001, gated
+by per-provider feature flags (`GOOGLE_ENABLED` / `APPLE_ENABLED` /
+`FACEBOOK_ENABLED`) so each slice's deployment only requires that provider's
+secrets — slice 1 boots with `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true`
+and no Apple/FB values. See [`docs/auth.md`](./docs/auth.md) "Per-provider
+gating" + "What's not implemented yet" for the full list and `feat/auth-sso`
+Epic #11 for issue tracking.
 
 **Other product features** (listings, search, transactions, AR viewer) still
 have **schemas and design docs but no implementation yet** — each domain doc
