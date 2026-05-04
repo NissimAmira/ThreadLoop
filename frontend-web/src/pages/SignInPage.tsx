@@ -199,9 +199,10 @@ export function SignInPage() {
   // before `signIn()`. We don't render Apple's own button (the SDK's
   // declarative `<div id="appleid-signin">` requires the script to be loaded
   // before the markup paints, which fights React's render order); we render a
-  // plain Tailwind-styled button that calls `signIn()` on click and matches
-  // Apple's brand guidelines (black bg, white text, Apple logo, "Sign in with
-  // Apple" text).
+  // plain Tailwind-styled button that calls `signIn()` on click and
+  // approximates Apple's brand guidelines (black bg, white text, Apple
+  // glyph, "Sign in with Apple" text). The official brand-asset mark
+  // ships pre-mobile-review (#20).
   useEffect(() => {
     if (state.status === "authenticated") return;
     let cancelled = false;
@@ -217,6 +218,9 @@ export function SignInPage() {
           // the button render disabled with an actionable error rather than
           // a broken click. Mirrors the Google path.
           setAppleStatus("error");
+          setError(
+            "Apple sign-in is not configured for this build. Set VITE_APPLE_CLIENT_ID and reload.",
+          );
           return;
         }
         try {
@@ -229,11 +233,13 @@ export function SignInPage() {
           setAppleStatus("ready");
         } catch {
           setAppleStatus("error");
+          setError("Could not initialize Apple sign-in. Please retry.");
         }
       })
       .catch(() => {
         if (cancelled) return;
         setAppleStatus("error");
+        setError("Could not load Apple sign-in. Please retry.");
       });
     return () => {
       cancelled = true;
@@ -278,7 +284,7 @@ export function SignInPage() {
           Sign in to ThreadLoop
         </h2>
         <p className="text-neutral-600 mb-6">
-          Use Google or Apple to continue. We never store passwords.
+          Continue with one of the providers below. We never store passwords.
         </p>
 
         <div
@@ -295,13 +301,13 @@ export function SignInPage() {
             disabled={appleDisabled}
             data-testid="apple-signin-button"
             aria-label="Sign in with Apple"
-            className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-black px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
+            className="w-full inline-flex items-center justify-center gap-2 rounded bg-black px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <svg
               aria-hidden="true"
               focusable="false"
               viewBox="0 0 16 16"
-              className="h-4 w-4"
+              className="h-[18px] w-[18px]"
               fill="currentColor"
             >
               <path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516.024.034 1.52.087 2.475-1.258.955-1.345.762-2.391.728-2.43Zm3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422.212-2.189 1.675-2.789 1.698-2.854.023-.065-.597-.79-1.254-1.157a3.692 3.692 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56.244.729.625 1.924 1.273 2.796.576.984 1.34 1.667 1.659 1.899.319.232 1.219.386 1.843.067.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758.347-.79.505-1.217.473-1.282Z" />
