@@ -673,16 +673,24 @@ Already landed:
   responses surface as a generic error string — the linking UI itself is
   slice 4 (#40). Auth context conventions documented above under
   "Web client (slices 1 & 2 — Google + Apple)".
-- **Slice-2 FE** (#38): Apple sign-in button on `/sign-in` next to the
-  Google one, wired via the Sign in with Apple JS SDK. Posts `{ idToken,
-  code, name? }` to `POST /api/auth/apple/callback`; on success follows
-  the same redirect path as Google (`?next=` or `/`). `link_required`
-  reuses the slice-1 generic-error path; the full link UI is still slice
-  4. Apple-relay email accounts flow through end-to-end (backend's
-  `is_private_email` bypass plus an FE that doesn't special-case email
-  shapes). New env vars: `VITE_APPLE_CLIENT_ID` (required when
-  `APPLE_ENABLED=true`) and `VITE_APPLE_REDIRECT_URI` (optional). Cypress
-  smoke at `cypress/e2e/sign-in-apple.cy.ts`.
+- **Slice-2 FE** (#38) — *shipped to main 2026-05-04, deferred from
+  product*: Apple sign-in button on `/sign-in` next to the Google one,
+  wired via the Sign in with Apple JS SDK. Posts `{ idToken, code,
+  name? }` to `POST /api/auth/apple/callback`; on success follows the
+  same redirect path as Google (`?next=` or `/`). `link_required`
+  reuses the slice-1 generic-error path; the full link UI is still
+  slice 4. Apple-relay email accounts flow through end-to-end
+  (backend's `is_private_email` bypass plus an FE that doesn't
+  special-case email shapes). New env vars: `VITE_APPLE_CLIENT_ID`
+  (required when `APPLE_ENABLED=true`) and `VITE_APPLE_REDIRECT_URI`
+  (optional). Cypress smoke at `cypress/e2e/sign-in-apple.cy.ts`.
+  **Disabled by default in every deployment** (`APPLE_ENABLED=false`,
+  `VITE_APPLE_CLIENT_ID` unset → button renders disabled and is hidden
+  by the polish task #56) — re-activation requires Apple Developer
+  Program enrollment per RFC 0001 § "Deferred providers". The Apple
+  branches of the auth surface continue to be exercised by tests and
+  by the dev stack (when an operator opts in by setting the flag and
+  secrets locally).
 - **camelCase wire shape** (#44): the contract drift between
   `shared/openapi.yaml` (snake) and `shared/src/types/` (camel) inherited
   from #12 was resolved by flipping the wire to camelCase via Pydantic
