@@ -1,8 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthContext";
 import type { GoogleCredentialResponse, GoogleIdApi } from "../auth/google";
+import type { AppleIdAuthApi, AppleSignInResponse } from "../auth/apple";
+import * as appleModule from "../auth/apple";
 import { SignInPage, safeNext } from "./SignInPage";
 import { MePage } from "./MePage";
 
@@ -38,6 +40,39 @@ function installGisStub(): StubHandle {
       callback(resp);
     },
     buttonRendered: () => rendered,
+  };
+}
+
+interface AppleStubHandle {
+  api: AppleIdAuthApi;
+  setNextResponse: (
+    resp: AppleSignInResponse | { error: string } | Error,
+  ) => void;
+  initCalled: () => boolean;
+}
+
+function installAppleStub(): AppleStubHandle {
+  let nextResponse: AppleSignInResponse | { error: string } | Error = {
+    authorization: { id_token: "stub-id-token", code: "stub-code" },
+  };
+  let initCalled = false;
+  const stub: AppleIdAuthApi = {
+    init: () => {
+      initCalled = true;
+    },
+    signIn: () => {
+      if (nextResponse instanceof Error) return Promise.reject(nextResponse);
+      if ("error" in nextResponse) return Promise.reject(nextResponse);
+      return Promise.resolve(nextResponse);
+    },
+  };
+  window.__threadloopAppleIdStub__ = stub;
+  return {
+    api: stub,
+    setNextResponse: (resp) => {
+      nextResponse = resp;
+    },
+    initCalled: () => initCalled,
   };
 }
 
@@ -80,11 +115,13 @@ function renderSignIn(initialPath = "/sign-in") {
 describe("SignInPage", () => {
   beforeEach(() => {
     delete window.__threadloopGoogleIdStub__;
+    delete window.__threadloopAppleIdStub__;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     delete window.__threadloopGoogleIdStub__;
+    delete window.__threadloopAppleIdStub__;
   });
 
   it("renders a Google button via the GIS stub once anonymous", async () => {
@@ -190,6 +227,244 @@ describe("SignInPage", () => {
       expect(screen.getByTestId("sign-in-error").textContent).toMatch(/rejected/i);
     });
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it("renders the Apple button enabled once init() resolves", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    renderSignIn();
+    const button = await screen.findByTestId("apple-signin-button");
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveAttribute("aria-label", "Sign in with Apple");
+    // Initially disabled while the SDK init() promise resolves; flips to
+    // enabled below.
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it("renders the Apple button disabled with an actionable error when VITE_APPLE_CLIENT_ID is unset", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    // Deliberately do NOT install the Apple stub — the loader resolves to
+    // a no-op API surface so we can drive the !APPLE_CLIENT_ID branch.
+    const noopApi: AppleIdAuthApi = {
+      init: () => {},
+      signIn: () =>
+        Promise.reject(new Error("signIn should not be called in this path")),
+    };
+    vi.spyOn(appleModule, "loadAppleIdentity").mockResolvedValue(noopApi);
+    renderSignIn();
+    const button = await screen.findByTestId("apple-signin-button");
+    expect(button).toBeInTheDocument();
+    // VITE_APPLE_CLIENT_ID is unset in test env and no stub is installed,
+    // so the button stays disabled and an actionable error is shown.
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Apple sign-in is not configured for this build/i,
+      );
+    });
+    expect(button).toBeDisabled();
+  });
+
+  it("renders the Apple button disabled with a retryable error when the SDK script fails to load", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    vi.spyOn(appleModule, "loadAppleIdentity").mockRejectedValue(
+      new Error("Failed to load Sign in with Apple JS"),
+    );
+    renderSignIn();
+    const button = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Could not load Apple sign-in/i,
+      );
+    });
+    expect(button).toBeDisabled();
+  });
+
+  it("Apple flow → posts idToken+code+name and redirects to ?next", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/apple/callback")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(wireSession), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse({
+      authorization: { id_token: "apple-id-token", code: "apple-code" },
+      user: { name: { firstName: "Ada", lastName: "Lovelace" } },
+    });
+    renderSignIn("/sign-in?next=/me");
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("me-display-name").textContent).toBe("Ada Lovelace");
+    });
+
+    const appleCall = fetchMock.mock.calls.find((c) =>
+      typeof c[0] === "string" ? c[0].includes("/api/auth/apple/callback") : false,
+    );
+    expect(appleCall).toBeDefined();
+    const init = appleCall![1] as RequestInit;
+    expect(init.body).toBe(
+      JSON.stringify({
+        idToken: "apple-id-token",
+        code: "apple-code",
+        name: "Ada Lovelace",
+      }),
+    );
+  });
+
+  it("Apple linkRequired surfaces the generic cross-provider error", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/apple/callback")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              linkRequired: true,
+              linkProvider: "google",
+              linkToken: "link-jwt",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse({
+      authorization: { id_token: "apple-id-token", code: "apple-code" },
+    });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /registered with another provider/i,
+      );
+    });
+  });
+
+  it("Apple-relay-email accounts (privaterelay.appleid.com) sign in cleanly", async () => {
+    const relayUser = {
+      ...wireUser,
+      provider: "apple",
+      email: "abc123xyz@privaterelay.appleid.com",
+      emailVerified: true,
+    };
+    const relaySession = { ...wireSession, user: relayUser };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/apple/callback")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(relaySession), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse({
+      authorization: { id_token: "apple-id-token", code: "apple-code" },
+    });
+    renderSignIn("/sign-in?next=/me");
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("me-email").textContent).toBe(
+        "abc123xyz@privaterelay.appleid.com",
+      );
+    });
+  });
+
+  it("Apple SDK rejection surfaces a retryable error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse(new Error("network down"));
+    renderSignIn();
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Apple sign-in/i,
+      );
+    });
+  });
+
+  it("Apple user-cancel does not surface a scary error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse({ error: "popup_closed_by_user" });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    // Give the click handler a chance to settle.
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").toBe("");
   });
 });
 

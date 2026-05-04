@@ -78,6 +78,28 @@ that provider's secrets:
   `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`.
 - `FACEBOOK_ENABLED=true` → `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`.
 
+The web client takes the matching set of `VITE_*` env vars: each provider
+slice that's enabled in a build needs its own client-side identifier so
+the SDK can bootstrap. Mismatched FE/BE values (e.g. a Service ID on the
+FE that disagrees with the BE's `APPLE_CLIENT_ID`) silently fail
+verification at the JWKS step — the BE's `aud` check rejects the token —
+so the deploy story keeps them in lockstep:
+
+- `GOOGLE_ENABLED=true` → set `VITE_GOOGLE_CLIENT_ID` (web build) to the
+  same Google project as `GOOGLE_CLIENT_ID` (backend).
+- `APPLE_ENABLED=true` → set `VITE_APPLE_CLIENT_ID` (web build) to the
+  same Service ID as `APPLE_CLIENT_ID` (backend).
+  `VITE_APPLE_REDIRECT_URI` is optional; defaults to
+  `window.location.origin` if unset.
+- `FACEBOOK_ENABLED=true` → (slice 3, not yet shipped) will pair a
+  `VITE_FACEBOOK_APP_ID` with `FACEBOOK_APP_ID`.
+
+When the FE env var is missing for a provider whose BE flag is on, the
+sign-in page renders that provider's button disabled with no scary error
+— it's the same actionable-misconfiguration UX as Google's
+"VITE_GOOGLE_CLIENT_ID is not set" path. The other enabled providers
+still work.
+
 The validator catches the misconfiguration where an unset provider secret
 would silently make every sign-in look like "your token is invalid" (401)
 when the real fault is server config. Per-provider gating preserves the
@@ -489,11 +511,11 @@ def open_transaction(user: User = Depends(require_buyer)):  # checks can_purchas
 A user can hold both roles simultaneously and switch contexts without
 re-authenticating.
 
-## Web client (slice 1 — Google only)
+## Web client (slices 1 & 2 — Google + Apple)
 
 The web sign-in surface ships in vertical slices (#19, #38, #39, #40). Slice
 1 lands the Google end-to-end demo plus the shared scaffolding all later
-slices reuse.
+slices reuse; slice 2 (#38) adds the Apple button next to it.
 
 ### Auth context
 
@@ -541,11 +563,62 @@ CI. `VITE_GOOGLE_CLIENT_ID` is required at runtime in real builds — when
 unset, `/sign-in` renders an actionable configuration error rather than a
 silently broken button.
 
+### Sign in with Apple JS
+
+`frontend-web/src/auth/apple.ts` mirrors the Google loader: it lazy-loads
+`https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js`
+on first need and exposes a typed `loadAppleIdentity()` promise. Tests +
+Cypress install `window.__threadloopAppleIdStub__` before mount, same as
+the Google stub seam.
+
+The page renders its own Tailwind-styled button rather than Apple's
+declarative `<div id="appleid-signin">` — the declarative widget requires
+the SDK script to be loaded before the markup paints, which fights React's
+render order and made the Apple init effect race with first paint.
+Rendering our own button and calling `AppleID.auth.signIn()` on click is
+the path of least surprise inside React. The button approximates Apple's
+brand guidelines (black background, white logo, white "Sign in with Apple"
+label, full SDK round-trip); the inline glyph is the Bootstrap Icons
+`bi-apple` mark rather than Apple's official brand-asset SVG. Pre-App
+Store-review (mobile slice / #20) we'll swap in the official mark from
+Apple's brand-assets pack — for the web demo the approximate mark is
+enough to validate the flow.
+
+`AppleID.auth.signIn()` resolves with `{ authorization: { id_token, code,
+state? }, user? }`. The page posts `{ idToken, code, name? }` to
+`POST /api/auth/apple/callback`; `name` is the joined `firstName lastName`
+from the response's `user` block, which Apple only ships on first sign-in
+(and only when the app requested the `name` scope). Subsequent sign-ins
+omit `user` entirely and the backend reuses the existing
+`users.display_name`. `composeAppleDisplayName` collapses missing or
+whitespace-only halves to `undefined` so the request body never carries
+`name: ""`.
+
+User-cancellation rejections (`{ error: "popup_closed_by_user" }`,
+`{ error: "user_cancelled_authorize" }`) are swallowed without surfacing a
+scary error — the user can just click again. Other rejection shapes
+surface as a retryable "Could not start Apple sign-in" message.
+
+`VITE_APPLE_CLIENT_ID` is required at runtime in real builds; when unset,
+the Apple button renders disabled rather than launching a broken popup.
+`VITE_APPLE_REDIRECT_URI` is optional and defaults to
+`window.location.origin` — a same-origin configuration is the common case;
+override only when the build is served from an origin different from the
+one registered against the Apple Service ID.
+
+`link_required` responses on the Apple branch surface the same generic
+"This email is registered with another provider…" message as Google
+(slice-4 / #40 will replace it with the full re-auth UI). Apple-relay
+emails (`*@privaterelay.appleid.com`) flow through unchanged — the
+backend's `is_private_email` bypass means the relay account always lands
+as a fresh identity, and the FE just renders whatever email the BE
+returned on `/me`.
+
 ### Out of scope here
 
-Apple and Facebook sign-in buttons (#38 / #39) and the full `link_required`
-linking UI (#40) ship in their own slices. Slice 1's `link_required`
-handling is a generic error message ("This email is registered with another
+The Facebook sign-in button (#39) and the full `link_required` linking UI
+(#40) ship in their own slices. Slices 1 and 2's `link_required` handling
+is a generic error message ("This email is registered with another
 provider; please sign in with that provider instead") with no second-step
 re-auth — enough to validate the contract surface without prematurely
 building UI that #40 will rework.
@@ -554,7 +627,6 @@ building UI that #40 will rework.
 
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
-- Apple sign-in button on web (slice 2 / #38).
 - Facebook sign-in button on web (slice 3 / #39).
 - Full `link_required` linking UI flow on web (slice 4 / #40).
 - Mobile SDK integration (#20).
@@ -600,7 +672,17 @@ Already landed:
   Google flow and asserts the user lands on `/me`. `link_required`
   responses surface as a generic error string — the linking UI itself is
   slice 4 (#40). Auth context conventions documented above under
-  "Web client (slice 1 — Google only)".
+  "Web client (slices 1 & 2 — Google + Apple)".
+- **Slice-2 FE** (#38): Apple sign-in button on `/sign-in` next to the
+  Google one, wired via the Sign in with Apple JS SDK. Posts `{ idToken,
+  code, name? }` to `POST /api/auth/apple/callback`; on success follows
+  the same redirect path as Google (`?next=` or `/`). `link_required`
+  reuses the slice-1 generic-error path; the full link UI is still slice
+  4. Apple-relay email accounts flow through end-to-end (backend's
+  `is_private_email` bypass plus an FE that doesn't special-case email
+  shapes). New env vars: `VITE_APPLE_CLIENT_ID` (required when
+  `APPLE_ENABLED=true`) and `VITE_APPLE_REDIRECT_URI` (optional). Cypress
+  smoke at `cypress/e2e/sign-in-apple.cy.ts`.
 - **camelCase wire shape** (#44): the contract drift between
   `shared/openapi.yaml` (snake) and `shared/src/types/` (camel) inherited
   from #12 was resolved by flipping the wire to camelCase via Pydantic
