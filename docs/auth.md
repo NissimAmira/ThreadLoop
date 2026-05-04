@@ -95,10 +95,16 @@ so the deploy story keeps them in lockstep:
   `VITE_FACEBOOK_APP_ID` with `FACEBOOK_APP_ID`.
 
 When the FE env var is missing for a provider whose BE flag is on, the
-sign-in page renders that provider's button disabled with no scary error
-— it's the same actionable-misconfiguration UX as Google's
-"VITE_GOOGLE_CLIENT_ID is not set" path. The other enabled providers
-still work.
+sign-in page hides that provider's button entirely in a production build
+(no scary error to end users) and shows an actionable developer message
+in `import.meta.env.DEV` so a misconfigured local stack stays loud. The
+other enabled providers still work.
+
+> **Local dev migration note:** `.env` files copied from before PR #53
+> don't carry the `*_ENABLED` flags and will boot the backend with the
+> entire auth subsystem off (every `/api/auth/*` route 404s — the FE
+> sign-in flow then looks broken). Re-copy `backend/.env.example` and
+> set at minimum `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` for slice 1.
 
 The validator catches the misconfiguration where an unset provider secret
 would silently make every sign-in look like "your token is invalid" (401)

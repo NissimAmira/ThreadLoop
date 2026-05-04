@@ -13,8 +13,23 @@ const APPLE_REDIRECT_URI = import.meta.env.VITE_APPLE_REDIRECT_URI ?? "";
 const LINK_REQUIRED_MESSAGE =
   "This email is registered with another provider; please sign in with that provider instead.";
 
-type Status = "idle" | "loading-sdk" | "ready" | "exchanging" | "error";
-type AppleStatus = "idle" | "loading-sdk" | "ready" | "error";
+// Visual width applied to both providers' buttons so they line up on
+// `/sign-in`. GIS clamps its `width` option between ~240–400; 320 matches
+// the design and keeps a comfortable target on both desktop and mobile.
+const PROVIDER_BUTTON_WIDTH_PX = 320;
+
+// `"hidden"` is the prod-mode response to a missing `VITE_*_CLIENT_ID`:
+// rather than show end users a developer-flavoured error, drop the button
+// entirely. In DEV the actionable error stays so misconfigured local stacks
+// remain obvious to engineers. See docs/auth.md § Per-provider gating.
+type Status =
+  | "idle"
+  | "loading-sdk"
+  | "ready"
+  | "exchanging"
+  | "error"
+  | "hidden";
+type AppleStatus = "idle" | "loading-sdk" | "ready" | "error" | "hidden";
 
 /**
  * Constrain `?next=` to same-origin app paths. Anything else (protocol-relative
@@ -108,6 +123,9 @@ export function SignInPage() {
         text: "signin_with",
         shape: "rectangular",
         logo_alignment: "left",
+        // GIS clamps width between ~240 and ~400; 320 matches Apple's
+        // explicit width below so the two buttons line up.
+        width: PROVIDER_BUTTON_WIDTH_PX,
       });
     }
   }, []);
@@ -120,10 +138,20 @@ export function SignInPage() {
       .then((gis) => {
         if (cancelled) return;
         if (!GOOGLE_CLIENT_ID && !window.__threadloopGoogleIdStub__) {
-          setStatus("error");
-          setError(
-            "Google sign-in is not configured for this build. Set VITE_GOOGLE_CLIENT_ID and reload.",
-          );
+          // Slice-N-only deployments unset VITE_GOOGLE_CLIENT_ID to drop the
+          // Google button. Prod users see no button (matches the
+          // docs/auth.md § Per-provider gating intent: "the sign-in page
+          // renders that provider's button disabled with no scary error").
+          // DEV mode keeps the actionable error so a misconfigured local
+          // stack is loud, not silent.
+          if (import.meta.env.DEV) {
+            setStatus("error");
+            setError(
+              "Google sign-in is not configured for this build. Set VITE_GOOGLE_CLIENT_ID and reload.",
+            );
+          } else {
+            setStatus("hidden");
+          }
           return;
         }
         initAndRender(gis);
@@ -132,11 +160,15 @@ export function SignInPage() {
       .catch((err: unknown) => {
         if (cancelled) return;
         setStatus("error");
-        setError(
-          err instanceof Error
-            ? `Could not load Google sign-in (${err.message}). Please retry.`
-            : "Could not load Google sign-in. Please retry.",
-        );
+        // Only the dev-flavoured tail (the underlying error message) is
+        // gated on DEV; the user-facing message stays the same.
+        if (import.meta.env.DEV && err instanceof Error) {
+          setError(
+            `Could not load Google sign-in (${err.message}). Please retry.`,
+          );
+        } else {
+          setError("Could not load Google sign-in. Please retry.");
+        }
       });
     return () => {
       cancelled = true;
@@ -214,13 +246,19 @@ export function SignInPage() {
           !APPLE_CLIENT_ID &&
           !window.__threadloopAppleIdStub__
         ) {
-          // Slice-2 deploys without an Apple Service ID configured will see
-          // the button render disabled with an actionable error rather than
-          // a broken click. Mirrors the Google path.
-          setAppleStatus("error");
-          setError(
-            "Apple sign-in is not configured for this build. Set VITE_APPLE_CLIENT_ID and reload.",
-          );
+          // Slice-1-only deployments unset VITE_APPLE_CLIENT_ID to drop the
+          // Apple button. Prod users see no button (matches the
+          // docs/auth.md § Per-provider gating intent). DEV mode keeps the
+          // actionable error so a misconfigured local stack is loud, not
+          // silent. Symmetric with the Google path above.
+          if (import.meta.env.DEV) {
+            setAppleStatus("error");
+            setError(
+              "Apple sign-in is not configured for this build. Set VITE_APPLE_CLIENT_ID and reload.",
+            );
+          } else {
+            setAppleStatus("hidden");
+          }
           return;
         }
         try {
@@ -287,13 +325,16 @@ export function SignInPage() {
           Continue with one of the providers below. We never store passwords.
         </p>
 
-        <div
-          ref={buttonContainerRef}
-          data-testid="google-button-container"
-          className="min-h-[44px] flex items-center"
-          aria-label="Sign in with Google"
-        />
+        {status !== "hidden" && (
+          <div
+            ref={buttonContainerRef}
+            data-testid="google-button-container"
+            className="min-h-[44px] flex items-center"
+            aria-label="Sign in with Google"
+          />
+        )}
 
+        {appleStatus !== "hidden" && (
         <div className="mt-3">
           <button
             type="button"
@@ -301,7 +342,7 @@ export function SignInPage() {
             disabled={appleDisabled}
             data-testid="apple-signin-button"
             aria-label="Sign in with Apple"
-            className="w-full inline-flex items-center justify-center gap-2 rounded bg-black px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
+            className="w-[320px] inline-flex items-center justify-center gap-2 rounded bg-black px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <svg
               aria-hidden="true"
@@ -315,6 +356,7 @@ export function SignInPage() {
             <span>Sign in with Apple</span>
           </button>
         </div>
+        )}
 
         {status === "loading-sdk" && (
           <p className="mt-4 text-sm text-neutral-500">Loading Google sign-in…</p>
