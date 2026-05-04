@@ -1,4 +1,9 @@
-import type { HealthResponse, Session, User } from "@threadloop/shared";
+import type {
+  AppleSsoCallbackInput,
+  HealthResponse,
+  Session,
+  User,
+} from "@threadloop/shared";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
@@ -76,6 +81,19 @@ export const api = {
       request<Session>("/api/auth/google/callback", {
         method: "POST",
         body: { idToken },
+      }),
+
+    /**
+     * POST /api/auth/apple/callback — exchange an Apple ID token + code for a session.
+     *
+     * Apple's contract requires both `idToken` and `code`; `name` is optional
+     * and only sent on the user's very first sign-in (Apple omits it on every
+     * subsequent flow, and the backend reuses the existing `display_name`).
+     */
+    appleCallback: (input: AppleSsoCallbackInput): Promise<Session> =>
+      request<Session>("/api/auth/apple/callback", {
+        method: "POST",
+        body: input,
       }),
 
     /** POST /api/auth/refresh — rotate the refresh cookie for a new access token. */

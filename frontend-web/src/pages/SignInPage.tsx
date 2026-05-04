@@ -4,12 +4,17 @@ import { ApiError, api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { loadGoogleIdentity } from "../auth/google";
 import type { GoogleCredentialResponse } from "../auth/google";
+import { composeAppleDisplayName, loadAppleIdentity } from "../auth/apple";
+import type { AppleSignInResponse } from "../auth/apple";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
+const APPLE_CLIENT_ID = import.meta.env.VITE_APPLE_CLIENT_ID ?? "";
+const APPLE_REDIRECT_URI = import.meta.env.VITE_APPLE_REDIRECT_URI ?? "";
 const LINK_REQUIRED_MESSAGE =
   "This email is registered with another provider; please sign in with that provider instead.";
 
 type Status = "idle" | "loading-sdk" | "ready" | "exchanging" | "error";
+type AppleStatus = "idle" | "loading-sdk" | "ready" | "error";
 
 /**
  * Constrain `?next=` to same-origin app paths. Anything else (protocol-relative
@@ -34,6 +39,9 @@ export function SignInPage() {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const buttonContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const [appleStatus, setAppleStatus] = useState<AppleStatus>("idle");
+  const [appleBusy, setAppleBusy] = useState(false);
 
   // Already signed in? Bounce to `next`. Effect rather than render guard so
   // we don't violate the rules of hooks below.
@@ -153,6 +161,113 @@ export function SignInPage() {
       });
   }, [initAndRender]);
 
+  // ---- Apple (slice 2 / #38) ----
+
+  const handleAppleResponse = useCallback(
+    async (resp: AppleSignInResponse) => {
+      setError(null);
+      try {
+        const session = await api.auth.appleCallback({
+          idToken: resp.authorization.id_token,
+          code: resp.authorization.code,
+          name: composeAppleDisplayName(resp.user),
+        });
+        if (session.linkRequired) {
+          setError(LINK_REQUIRED_MESSAGE);
+          return;
+        }
+        signIn(session);
+        navigate(next, { replace: true });
+      } catch (err) {
+        if (err instanceof ApiError) {
+          setError(
+            err.status === 401
+              ? "Apple sign-in was rejected. Please try again."
+              : err.status === 503
+                ? "Apple sign-in is temporarily unavailable. Please try again."
+                : err.message,
+          );
+        } else {
+          setError("Could not complete sign-in. Please try again.");
+        }
+      }
+    },
+    [signIn, navigate, next],
+  );
+
+  // Init Apple on mount. The official SDK exposes `init(...)` that has to fire
+  // before `signIn()`. We don't render Apple's own button (the SDK's
+  // declarative `<div id="appleid-signin">` requires the script to be loaded
+  // before the markup paints, which fights React's render order); we render a
+  // plain Tailwind-styled button that calls `signIn()` on click and matches
+  // Apple's brand guidelines (black bg, white text, Apple logo, "Sign in with
+  // Apple" text).
+  useEffect(() => {
+    if (state.status === "authenticated") return;
+    let cancelled = false;
+    setAppleStatus("loading-sdk");
+    loadAppleIdentity()
+      .then((apple) => {
+        if (cancelled) return;
+        if (
+          !APPLE_CLIENT_ID &&
+          !window.__threadloopAppleIdStub__
+        ) {
+          // Slice-2 deploys without an Apple Service ID configured will see
+          // the button render disabled with an actionable error rather than
+          // a broken click. Mirrors the Google path.
+          setAppleStatus("error");
+          return;
+        }
+        try {
+          apple.init({
+            clientId: APPLE_CLIENT_ID || "stub-apple-client-id",
+            scope: "name email",
+            redirectURI: APPLE_REDIRECT_URI || window.location.origin,
+            usePopup: true,
+          });
+          setAppleStatus("ready");
+        } catch {
+          setAppleStatus("error");
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAppleStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleAppleClick = useCallback(async () => {
+    if (appleStatus !== "ready" || appleBusy) return;
+    setAppleBusy(true);
+    setError(null);
+    try {
+      const apple = await loadAppleIdentity();
+      const resp = await apple.signIn();
+      await handleAppleResponse(resp);
+    } catch (err: unknown) {
+      // Apple rejects on user-cancel with `{ error: "popup_closed_by_user" }`
+      // or similar; treat all SDK rejections as "the user didn't complete it"
+      // and surface a retry-able message rather than a scary failure.
+      if (err && typeof err === "object" && "error" in err) {
+        const code = (err as { error?: unknown }).error;
+        if (code === "popup_closed_by_user" || code === "user_cancelled_authorize") {
+          // User-cancelled — leave error empty so they can just click again.
+          return;
+        }
+      }
+      setError("Could not start Apple sign-in. Please try again.");
+    } finally {
+      setAppleBusy(false);
+    }
+  }, [appleStatus, appleBusy, handleAppleResponse]);
+
+  const appleDisabled = appleStatus !== "ready" || appleBusy;
+
   return (
     <main className="flex-1 max-w-md mx-auto w-full px-6 py-16">
       <section
@@ -163,7 +278,7 @@ export function SignInPage() {
           Sign in to ThreadLoop
         </h2>
         <p className="text-neutral-600 mb-6">
-          Use your Google account to continue. We never store passwords.
+          Use Google or Apple to continue. We never store passwords.
         </p>
 
         <div
@@ -173,11 +288,38 @@ export function SignInPage() {
           aria-label="Sign in with Google"
         />
 
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => void handleAppleClick()}
+            disabled={appleDisabled}
+            data-testid="apple-signin-button"
+            aria-label="Sign in with Apple"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-black px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              viewBox="0 0 16 16"
+              className="h-4 w-4"
+              fill="currentColor"
+            >
+              <path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516.024.034 1.52.087 2.475-1.258.955-1.345.762-2.391.728-2.43Zm3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422.212-2.189 1.675-2.789 1.698-2.854.023-.065-.597-.79-1.254-1.157a3.692 3.692 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56.244.729.625 1.924 1.273 2.796.576.984 1.34 1.667 1.659 1.899.319.232 1.219.386 1.843.067.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758.347-.79.505-1.217.473-1.282Z" />
+            </svg>
+            <span>Sign in with Apple</span>
+          </button>
+        </div>
+
         {status === "loading-sdk" && (
           <p className="mt-4 text-sm text-neutral-500">Loading Google sign-in…</p>
         )}
         {status === "exchanging" && (
           <p className="mt-4 text-sm text-neutral-500">Completing sign-in…</p>
+        )}
+        {appleBusy && (
+          <p className="mt-4 text-sm text-neutral-500" data-testid="apple-busy">
+            Completing Apple sign-in…
+          </p>
         )}
 
         <div
@@ -199,9 +341,9 @@ export function SignInPage() {
           </button>
         )}
 
-        {/* TODO(slice-2/#38): wire Apple + Facebook buttons here. */}
+        {/* TODO(slice-3/#39): wire Facebook button here. */}
         <p className="mt-8 text-xs text-neutral-500">
-          Apple and Facebook sign-in are coming soon.
+          Facebook sign-in is coming soon.
         </p>
       </section>
     </main>
