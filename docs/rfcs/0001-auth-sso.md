@@ -1,18 +1,26 @@
 # RFC 0001: SSO authentication (Google / Apple / Facebook)
 
-- **Status:** Partially implemented (slice 1 live; slices 2–5 in flight)
+- **Status:** Partially implemented (Google web live; Apple deferred — see § Deferred providers; Facebook web + mobile pending)
 - **Author:** Nissim
 - **Created:** 2026-04-30
 - **Approved:** 2026-04-30
+- **Revised:** 2026-05-04 — Apple descoped from the active Epic. The
+  Apple BE callback and FE button are already in main and gated off
+  by default per `docs/auth.md` § "Per-provider gating"; they stay
+  dormant until the user enrolls in the Apple Developer Program. See
+  § "Deferred providers" below.
 - **Tracking issue:** #11 (Epic)
 - **Slice 1 shipped:** 2026-05-03 — Google web sign-in end-to-end
   (PR #43 FE + PR #41 BE + PR #47 wire shape; ADR 0009 captures the
   camelCase wire decision). See `docs/auth.md` "Already landed" for
   the per-PR breakdown.
-- **Remaining slices:** Apple web button (#38), Facebook web button
-  (#39), `link_required` UI flow (#40, paired with BE #18), mobile
-  SDK integration (#20). RFC scope is unchanged; rollout proceeds
-  per the slice-by-slice plan below.
+- **Slice 2 shipped (deferred from product):** 2026-05-04 — Apple
+  web sign-in code merged in PR #55 (#38). Code is in main, disabled
+  by default (`APPLE_ENABLED=false`). Stays deferred per § "Deferred
+  providers" below.
+- **Remaining slices in this Epic:** Facebook web button (#39),
+  `link_required` UI flow (#40, paired with BE #18), mobile SDK
+  integration (#20, Apple-on-iOS dropped from scope).
 
 ## TL;DR
 
@@ -33,16 +41,105 @@ developer.
 
 ## Goals
 
-1. Users can sign in via Google, Apple, or Facebook from web and mobile.
+1. Users can sign in via Google or Facebook from web and mobile. (Apple
+   is implemented but disabled in this Epic — see § "Deferred
+   providers".)
 2. No passwords stored or accepted, anywhere.
-3. Apple "Hide my Email" relay addresses are handled correctly — the
-   account is linkable to its real email if the user later confirms.
+3. Apple "Hide my Email" relay addresses are handled correctly when
+   Apple is re-activated — the account is linkable to its real email if
+   the user later confirms. (Verifier and bypass logic already shipped
+   in #15.)
 4. Sessions survive browser/app restarts via a refresh-token mechanism;
    inactive sessions expire after 30 days.
 5. The session-validation middleware is one line of code per protected
    route (Depends-style for FastAPI).
-6. iOS App Store compliance: Sign in with Apple is offered alongside any
-   other social login (Guideline 4.8).
+6. iOS App Store compliance: Sign in with Apple **will** be offered
+   alongside any other social login (Guideline 4.8) once the user
+   enrolls in the Apple Developer Program. The 4.8 obligation only
+   bites at App Store submission; while the iOS app is unsubmitted,
+   shipping Google + Facebook only is permissible. See § "Deferred
+   providers".
+
+## Deferred providers
+
+> **Tracker:** [#57](https://github.com/NissimAmira/ThreadLoop/issues/57) — *"Re-activate Apple Sign In once enrolled in Apple Developer Program"* (P3, tech debt). The re-activation procedure below is mirrored on that issue as the durable record; if this RFC and the issue ever drift, the RFC is canonical.
+
+### Apple — implemented, gated off, awaiting Apple Developer Program enrollment
+
+Apple sign-in is fully implemented end-to-end on backend and web, but
+**disabled by default in this Epic and in every deploy until the
+project owner enrolls in the Apple Developer Program**.
+
+**What's in main today:**
+
+- BE: `POST /api/auth/apple/callback` (#15, PR #33), Apple JWKS
+  verifier, `is_private_email` Hide-My-Email bypass, ES256
+  `client_secret` JWT generator with 50-minute in-process cache.
+- FE: `frontend-web/src/auth/apple.ts` SDK loader, Apple button on
+  `/sign-in` (#38, PR #55), Cypress smoke (`sign-in-apple.cy.ts`).
+- Tests pass against a stubbed Apple JWKS.
+
+**What's gating it off:**
+
+- Backend `APPLE_ENABLED` flag defaults to `false`
+  (`backend/app/config.py`). With this flag off, both
+  `POST /api/auth/apple/callback` and the `Settings` validation that
+  would require `APPLE_CLIENT_ID` / `APPLE_TEAM_ID` / `APPLE_KEY_ID`
+  / `APPLE_PRIVATE_KEY` are inert. See `docs/auth.md` § "Per-provider
+  gating" for the full behaviour matrix.
+- Frontend: when `VITE_APPLE_CLIENT_ID` is unset, the Apple button on
+  `/sign-in` renders in its disabled-fallback state.
+
+**Why deferred:** enabling Apple in production requires:
+
+- Enrollment in the Apple Developer Program (~$99 USD per year),
+  required to obtain the Service ID and `.p8` key.
+- Verified-domain configuration in the Apple Developer portal (the
+  redirect URL has to be served from a domain Apple has verified
+  against the Service ID), which is not free of effort even after
+  enrollment.
+
+The project owner has decided not to enroll until preparing for App
+Store submission of the iOS app. App Store Guideline 4.8 mandates
+Sign in with Apple at submission time if any other social login is
+offered; until then, shipping Google + Facebook only is permissible.
+A web-only deployment without an iOS app does not trigger 4.8.
+
+**Re-activation procedure** (when the owner enrolls):
+
+1. Provision Apple Service ID + `.p8` key in the Apple Developer
+   portal.
+2. Set BE secrets: `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`,
+   `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (PEM contents of the `.p8`).
+3. Set FE secret: `VITE_APPLE_CLIENT_ID` (must equal the BE's
+   `APPLE_CLIENT_ID` Service ID; mismatched values fail at the JWKS
+   `aud` check).
+4. Flip `APPLE_ENABLED=true` (BE) — `Settings` validates the secrets
+   are present at boot.
+5. The button on `/sign-in` lights up automatically once
+   `VITE_APPLE_CLIENT_ID` is set in the build.
+6. Run the existing Cypress smoke (`sign-in-apple.cy.ts`) against
+   real credentials, then validate in staging before flipping in
+   production. Same staging-before-prod cadence as the master
+   `AUTH_ENABLED` flag.
+
+**Why we did not rip the Apple code out:** the per-provider gating
+already keeps it dormant; ripping it out would be churn that the
+owner would have to undo by re-implementing slice 2 from scratch
+when they do enroll. The cost of leaving it in is the maintenance
+burden on a small surface that's covered by tests but not exercised
+in any active deployment — acceptable.
+
+### Mobile native Apple sign-in
+
+iOS native Apple sign-in (via `expo-apple-authentication`) is
+descoped from #20 in this Epic. The iOS app will sign in via Google
+and Facebook (both via `expo-auth-session`) until the App Store
+submission cycle starts. App Store Guideline 4.8 **only applies at
+submission time**, not during development; a Google + Facebook
+mobile build is shippable internally and to TestFlight without 4.8
+compliance, and Apple sign-in is added back as a slice in the App
+Store submission Epic.
 
 ## Non-goals
 
@@ -59,14 +156,20 @@ developer.
 
 ### User-visible flows
 
-**Sign-in (web).** A single sign-in page with three buttons. Clicking
-launches the provider's hosted flow in the same tab. On callback, the
-backend issues a session and the page redirects to the original
-destination.
+**Sign-in (web).** A single sign-in page with one button per active
+provider — currently Google and (once #39 lands) Facebook. The Apple
+button is rendered only when `VITE_APPLE_CLIENT_ID` is set; in the
+default deferred-Apple configuration it is not visible to end users.
+Clicking launches the provider's hosted flow in the same tab. On
+callback, the backend issues a session and the page redirects to the
+original destination.
 
-**Sign-in (mobile).** Apple uses native `expo-apple-authentication` (per
-4.8). Google and Facebook use `expo-auth-session` for in-app browser
-flows. On callback, the same backend endpoints issue a session.
+**Sign-in (mobile).** Google and Facebook use `expo-auth-session` for
+in-app browser flows on both iOS and Android. Native Apple sign-in
+via `expo-apple-authentication` is descoped from this Epic and ships
+with the App Store submission Epic per Guideline 4.8 (which is only
+enforced at submission time, not during development). On callback,
+the same backend endpoints issue a session.
 
 **Sign-out.** Clears refresh cookie + revokes the refresh token
 server-side. Access JWT will simply expire.
@@ -191,17 +294,24 @@ Issue a session ID, look it up server-side. Rejected because:
 
 1. **BE-only first.** Implement all three callbacks + session model
    behind feature flag `AUTH_ENABLED=false` (return 404 by default).
-   Land migrations.
+   Land migrations. *(Done.)*
 2. **Web sign-in page.** Wire to BE. Flag still off — can be tested via
-   compose stack.
-3. **Flip the flag in staging environment.** (Triggers Phase 2 of the
-   DevOps roadmap — staging environment must exist by this point.)
-4. **Mobile sign-in.** Follows web; reuses the same callback endpoints.
-5. **Flip the flag in prod** once all three platforms are validated in
-   staging.
+   compose stack. *(Done.)*
+3. **Flip the master flag in staging environment.** (Triggers Phase 2
+   of the DevOps roadmap — staging environment must exist by this
+   point.)
+4. **Mobile sign-in (Google + Facebook).** Follows web; reuses the
+   same callback endpoints. Apple-on-iOS dropped from this slice
+   per § "Deferred providers".
+5. **Flip the master flag in prod** once Google + Facebook are
+   validated in staging. **`APPLE_ENABLED` stays `false` in both
+   staging and prod** until Apple Developer Program enrollment;
+   re-activation procedure in § "Deferred providers".
 
-Each step is a separate PR. The flag pattern keeps each PR
-independently mergeable.
+Each step is a separate PR. The master `AUTH_ENABLED` flag plus
+per-provider `<PROVIDER>_ENABLED` flags keep each PR independently
+mergeable. Per-provider flags follow the same staging-before-prod
+cadence as the master flag.
 
 ### Documentation impact
 
@@ -216,29 +326,51 @@ Per `docs/contributing.md` → "Documentation is part of done":
 
 ## Acceptance criteria
 
-- [ ] User can sign in via Google on web (Chrome, Firefox, Safari).
-- [ ] User can sign in via Apple on web.
+Active scope (Google + Facebook on web and mobile):
+
+- [x] User can sign in via Google on web (Chrome, Firefox, Safari).
+      *(Slice 1 shipped 2026-05-03.)*
 - [ ] User can sign in via Facebook on web.
-- [ ] User can sign in via Apple on iOS (native flow).
 - [ ] User can sign in via Google on iOS and Android.
 - [ ] User can sign in via Facebook on iOS and Android.
-- [ ] Apple "Hide my Email" relay addresses don't error and create a
-      valid account.
 - [ ] Account-linking prompt fires when email collision is detected
-      across providers.
+      across providers (Google ↔ Facebook in this Epic — Facebook's
+      side never fires in practice because the Graph API doesn't
+      expose `email_verified`; see `docs/auth.md` § "Facebook
+      specifics"). Apple ↔ Google linking is shipped in code but
+      unreachable while `APPLE_ENABLED=false`.
 - [ ] Session expires after 30 days of inactivity (refresh token expiry).
 - [ ] Logout revokes the refresh token; subsequent /api/auth/refresh
       returns 401.
 - [ ] /api/me returns the current user with the correct shape per the
       OpenAPI spec.
-- [ ] Test coverage: integration tests per provider against test JWKS;
-      unit tests for the session middleware.
+- [ ] Test coverage: integration tests per active provider against
+      test JWKS; unit tests for the session middleware.
 - [ ] OpenAPI spec is updated and Schemathesis (when wired) finds no
       drift.
 - [ ] `docs/auth.md` "What's not implemented yet" reflects what shipped.
 
+Deferred (do NOT block Epic closure — see § "Deferred providers"):
+
+- [~] User can sign in via Apple on web. *(Code shipped in #38 / PR
+      #55; gated off by default. Re-activates when the owner enrolls
+      in the Apple Developer Program.)*
+- [~] User can sign in via Apple on iOS (native flow). *(Out of scope
+      for #20 in this Epic; ships in the App Store submission Epic
+      per Guideline 4.8.)*
+- [~] Apple "Hide my Email" relay addresses don't error and create a
+      valid account. *(Logic shipped in #15; reachable only with
+      `APPLE_ENABLED=true`.)*
+
 ## Out of scope follow-ups
 
+- **Apple sign-in re-activation** — flip `APPLE_ENABLED=true` in
+  staging then production once the owner enrolls in the Apple
+  Developer Program. Procedure documented in § "Deferred providers".
+  Tracked outside this Epic; will be its own slice when triggered.
+- **iOS native Apple sign-in** — `expo-apple-authentication`
+  integration on the mobile app. Lands in the App Store submission
+  Epic per Guideline 4.8.
 - Two-step linking when Apple relay is unmasked later.
 - Account deletion + GDPR data export.
 - MFA for sellers handling payouts.
