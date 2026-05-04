@@ -575,10 +575,14 @@ The page renders its own Tailwind-styled button rather than Apple's
 declarative `<div id="appleid-signin">` — the declarative widget requires
 the SDK script to be loaded before the markup paints, which fights React's
 render order and made the Apple init effect race with first paint.
-Rendering our own button with the brand-mark SVG and calling
-`AppleID.auth.signIn()` on click is the path of least surprise inside React
-and matches Apple's brand guidelines (black bg / white logo / white
-"Sign in with Apple" text).
+Rendering our own button and calling `AppleID.auth.signIn()` on click is
+the path of least surprise inside React. The button approximates Apple's
+brand guidelines (black background, white logo, white "Sign in with Apple"
+label, full SDK round-trip); the inline glyph is the Bootstrap Icons
+`bi-apple` mark rather than Apple's official brand-asset SVG. Pre-App
+Store-review (mobile slice / #20) we'll swap in the official mark from
+Apple's brand-assets pack — for the web demo the approximate mark is
+enough to validate the flow.
 
 `AppleID.auth.signIn()` resolves with `{ authorization: { id_token, code,
 state? }, user? }`. The page posts `{ idToken, code, name? }` to

@@ -19,10 +19,7 @@
  *
  * `user` is only populated on the very first sign-in for a given Apple ID
  * (and only when the app requested the `name` scope). Subsequent sign-ins
- * omit it; the backend reuses the existing `users.display_name`. Apple's
- * docs note that the response shape can also surface here as a `data`-
- * wrapped event payload (e.g. from popup postMessage paths) — the loader
- * normalizes both shapes so the page only ever sees this flat envelope.
+ * omit it; the backend reuses the existing `users.display_name`.
  */
 export interface AppleSignInResponse {
   authorization: {

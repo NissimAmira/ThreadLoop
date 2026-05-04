@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthContext";
 import type { GoogleCredentialResponse, GoogleIdApi } from "../auth/google";
 import type { AppleIdAuthApi, AppleSignInResponse } from "../auth/apple";
+import * as appleModule from "../auth/apple";
 import { SignInPage, safeNext } from "./SignInPage";
 import { MePage } from "./MePage";
 
@@ -228,7 +229,7 @@ describe("SignInPage", () => {
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
   });
 
-  it("renders a disabled Apple button next to the Google button", async () => {
+  it("renders the Apple button enabled once init() resolves", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(null, { status: 401 }),
     );
@@ -241,6 +242,50 @@ describe("SignInPage", () => {
     // Initially disabled while the SDK init() promise resolves; flips to
     // enabled below.
     await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it("renders the Apple button disabled with an actionable error when VITE_APPLE_CLIENT_ID is unset", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    // Deliberately do NOT install the Apple stub — the loader resolves to
+    // a no-op API surface so we can drive the !APPLE_CLIENT_ID branch.
+    const noopApi: AppleIdAuthApi = {
+      init: () => {},
+      signIn: () =>
+        Promise.reject(new Error("signIn should not be called in this path")),
+    };
+    vi.spyOn(appleModule, "loadAppleIdentity").mockResolvedValue(noopApi);
+    renderSignIn();
+    const button = await screen.findByTestId("apple-signin-button");
+    expect(button).toBeInTheDocument();
+    // VITE_APPLE_CLIENT_ID is unset in test env and no stub is installed,
+    // so the button stays disabled and an actionable error is shown.
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Apple sign-in is not configured for this build/i,
+      );
+    });
+    expect(button).toBeDisabled();
+  });
+
+  it("renders the Apple button disabled with a retryable error when the SDK script fails to load", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    vi.spyOn(appleModule, "loadAppleIdentity").mockRejectedValue(
+      new Error("Failed to load Sign in with Apple JS"),
+    );
+    renderSignIn();
+    const button = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Could not load Apple sign-in/i,
+      );
+    });
+    expect(button).toBeDisabled();
   });
 
   it("Apple flow → posts idToken+code+name and redirects to ?next", async () => {
