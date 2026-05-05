@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthContext";
 import type { GoogleCredentialResponse, GoogleIdApi } from "../auth/google";
+import * as googleModule from "../auth/google";
 import type { AppleIdAuthApi, AppleSignInResponse } from "../auth/apple";
 import * as appleModule from "../auth/apple";
 import { SignInPage, safeNext } from "./SignInPage";
@@ -120,6 +121,7 @@ describe("SignInPage", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     delete window.__threadloopGoogleIdStub__;
     delete window.__threadloopAppleIdStub__;
   });
@@ -444,6 +446,115 @@ describe("SignInPage", () => {
         /Apple sign-in/i,
       );
     });
+  });
+
+  it("hides the Apple button entirely (no dev-flavoured error) when VITE_APPLE_CLIENT_ID is unset in non-DEV mode", async () => {
+    vi.stubEnv("DEV", false);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    const noopApi: AppleIdAuthApi = {
+      init: () => {},
+      signIn: () =>
+        Promise.reject(new Error("signIn should not be called in this path")),
+    };
+    vi.spyOn(appleModule, "loadAppleIdentity").mockResolvedValue(noopApi);
+    renderSignIn();
+
+    // Google still renders (its stub is installed) so the page settles.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Sign in with Google")).toBeInTheDocument(),
+    );
+    // The dev-flavoured error must NOT appear in prod-mode.
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /VITE_APPLE_CLIENT_ID/i,
+    );
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /not configured for this build/i,
+    );
+    // The Apple button itself is removed from the tree.
+    await waitFor(() =>
+      expect(screen.queryByTestId("apple-signin-button")).toBeNull(),
+    );
+    vi.unstubAllEnvs();
+  });
+
+  it("hides the Google button entirely (no dev-flavoured error) when VITE_GOOGLE_CLIENT_ID is unset in non-DEV mode", async () => {
+    vi.stubEnv("DEV", false);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    // Deliberately do NOT install the Google stub — the loader resolves
+    // to the (test-injected) global, so we must override at module scope.
+    // We mock the loader to return a no-op API that should never be invoked.
+    const noopGis: GoogleIdApi = {
+      initialize: () => {},
+      renderButton: () => {
+        throw new Error("renderButton should not be called when hidden");
+      },
+      prompt: () => {},
+      cancel: () => {},
+      disableAutoSelect: () => {},
+    };
+    vi.spyOn(googleModule, "loadGoogleIdentity").mockResolvedValue(noopGis);
+    installAppleStub();
+    renderSignIn();
+
+    // Apple still renders (its stub is installed) so the page settles.
+    const appleBtn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(appleBtn).not.toBeDisabled());
+    // The dev-flavoured error must NOT appear in prod-mode.
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /VITE_GOOGLE_CLIENT_ID/i,
+    );
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /not configured for this build/i,
+    );
+    // The Google container itself is removed from the tree.
+    expect(screen.queryByTestId("google-button-container")).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it("renders an empty-state message when every provider is hidden in non-DEV mode", async () => {
+    vi.stubEnv("DEV", false);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    // Both loaders resolve to no-op APIs, neither client ID is set, neither
+    // stub is installed → both providers fall into the prod-mode `"hidden"`
+    // branch.
+    const noopGis: GoogleIdApi = {
+      initialize: () => {},
+      renderButton: () => {
+        throw new Error("renderButton should not be called when hidden");
+      },
+      prompt: () => {},
+      cancel: () => {},
+      disableAutoSelect: () => {},
+    };
+    vi.spyOn(googleModule, "loadGoogleIdentity").mockResolvedValue(noopGis);
+    const noopApple: AppleIdAuthApi = {
+      init: () => {},
+      signIn: () =>
+        Promise.reject(new Error("signIn should not be called in this path")),
+    };
+    vi.spyOn(appleModule, "loadAppleIdentity").mockResolvedValue(noopApple);
+    renderSignIn();
+
+    // The empty-state message renders.
+    await screen.findByTestId("sign-in-unavailable");
+    expect(screen.getByTestId("sign-in-unavailable").textContent).toMatch(
+      /Sign-in is currently unavailable/i,
+    );
+    // Neither button is in the tree.
+    expect(screen.queryByTestId("apple-signin-button")).toBeNull();
+    expect(screen.queryByTestId("google-button-container")).toBeNull();
+    // No dev-flavoured error leaks.
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /not configured for this build/i,
+    );
+    vi.unstubAllEnvs();
   });
 
   it("Apple user-cancel does not surface a scary error", async () => {
