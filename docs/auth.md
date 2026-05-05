@@ -98,7 +98,11 @@ When the FE env var is missing for a provider whose BE flag is on, the
 sign-in page hides that provider's button entirely in a production build
 (no scary error to end users) and shows an actionable developer message
 in `import.meta.env.DEV` so a misconfigured local stack stays loud. The
-other enabled providers still work.
+other enabled providers still work. If **every** provider's `VITE_*` is
+unset in a prod build (e.g. a misconfigured deploy where no client IDs
+made it through), the page substitutes an empty-state message —
+*"Sign-in is currently unavailable. Please try again later."* — for the
+button slots so users don't read the page as broken.
 
 > **Local dev migration note:** `.env` files copied from before PR #53
 > don't carry the `*_ENABLED` flags and will boot the backend with the

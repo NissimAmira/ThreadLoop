@@ -13,10 +13,15 @@ const APPLE_REDIRECT_URI = import.meta.env.VITE_APPLE_REDIRECT_URI ?? "";
 const LINK_REQUIRED_MESSAGE =
   "This email is registered with another provider; please sign in with that provider instead.";
 
-// Visual width applied to both providers' buttons so they line up on
-// `/sign-in`. GIS clamps its `width` option between ~240–400; 320 matches
-// the design and keeps a comfortable target on both desktop and mobile.
-const PROVIDER_BUTTON_WIDTH_PX = 320;
+// Visual cap applied to both providers' buttons so they line up on
+// `/sign-in` at desktop widths AND fill the column on narrow viewports
+// (iPhone SE / 375px would overflow a hard 320px pin by ~57px inside this
+// card's `p-8` + `px-6`). Treat as a max, not a hard width: Apple uses
+// `w-full` + `style={{ maxWidth }}` so the button shrinks below 320px when
+// the parent does, and GIS is intentionally NOT given a `width` option so
+// it intrinsic-sizes within its container — both buttons are bounded by
+// the same parent column, so width parity holds at every viewport.
+const PROVIDER_BUTTON_MAX_WIDTH_PX = 320;
 
 // `"hidden"` is the prod-mode response to a missing `VITE_*_CLIENT_ID`:
 // rather than show end users a developer-flavoured error, drop the button
@@ -123,9 +128,10 @@ export function SignInPage() {
         text: "signin_with",
         shape: "rectangular",
         logo_alignment: "left",
-        // GIS clamps width between ~240 and ~400; 320 matches Apple's
-        // explicit width below so the two buttons line up.
-        width: PROVIDER_BUTTON_WIDTH_PX,
+        // No `width` option: a hard pin overflows a 375px viewport (iPhone
+        // SE) inside this card. GIS intrinsic-sizes within its container
+        // instead, and the parent column caps both buttons at
+        // PROVIDER_BUTTON_MAX_WIDTH_PX on wider viewports.
       });
     }
   }, []);
@@ -312,6 +318,15 @@ export function SignInPage() {
 
   const appleDisabled = appleStatus !== "ready" || appleBusy;
 
+  // When every provider's button is hidden in prod (slice-N-only deployments
+  // where neither `VITE_GOOGLE_CLIENT_ID` nor `VITE_APPLE_CLIENT_ID` are set),
+  // the buttons section would otherwise render as blank space below the
+  // "continue with one of the providers below" prose. Substitute a graceful
+  // empty state so users don't read the page as broken. DEV builds keep the
+  // actionable per-provider error messages and do not enter this branch
+  // (one of `status` / `appleStatus` will be `"error"`, not `"hidden"`).
+  const allHidden = status === "hidden" && appleStatus === "hidden";
+
   return (
     <main className="flex-1 max-w-md mx-auto w-full px-6 py-16">
       <section
@@ -325,6 +340,15 @@ export function SignInPage() {
           Continue with one of the providers below. We never store passwords.
         </p>
 
+        {allHidden && (
+          <p
+            data-testid="sign-in-unavailable"
+            className="text-neutral-600"
+          >
+            Sign-in is currently unavailable. Please try again later.
+          </p>
+        )}
+
         {status !== "hidden" && (
           <div
             ref={buttonContainerRef}
@@ -335,27 +359,28 @@ export function SignInPage() {
         )}
 
         {appleStatus !== "hidden" && (
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() => void handleAppleClick()}
-            disabled={appleDisabled}
-            data-testid="apple-signin-button"
-            aria-label="Sign in with Apple"
-            className="w-[320px] inline-flex items-center justify-center gap-2 rounded bg-black px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            <svg
-              aria-hidden="true"
-              focusable="false"
-              viewBox="0 0 16 16"
-              className="h-[18px] w-[18px]"
-              fill="currentColor"
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => void handleAppleClick()}
+              disabled={appleDisabled}
+              data-testid="apple-signin-button"
+              aria-label="Sign in with Apple"
+              style={{ maxWidth: PROVIDER_BUTTON_MAX_WIDTH_PX }}
+              className="w-full inline-flex items-center justify-center gap-2 rounded bg-black px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516.024.034 1.52.087 2.475-1.258.955-1.345.762-2.391.728-2.43Zm3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422.212-2.189 1.675-2.789 1.698-2.854.023-.065-.597-.79-1.254-1.157a3.692 3.692 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56.244.729.625 1.924 1.273 2.796.576.984 1.34 1.667 1.659 1.899.319.232 1.219.386 1.843.067.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758.347-.79.505-1.217.473-1.282Z" />
-            </svg>
-            <span>Sign in with Apple</span>
-          </button>
-        </div>
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                viewBox="0 0 16 16"
+                className="h-[18px] w-[18px]"
+                fill="currentColor"
+              >
+                <path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516.024.034 1.52.087 2.475-1.258.955-1.345.762-2.391.728-2.43Zm3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422.212-2.189 1.675-2.789 1.698-2.854.023-.065-.597-.79-1.254-1.157a3.692 3.692 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56.244.729.625 1.924 1.273 2.796.576.984 1.34 1.667 1.659 1.899.319.232 1.219.386 1.843.067.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758.347-.79.505-1.217.473-1.282Z" />
+              </svg>
+              <span>Sign in with Apple</span>
+            </button>
+          </div>
         )}
 
         {status === "loading-sdk" && (

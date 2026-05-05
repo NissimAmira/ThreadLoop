@@ -516,6 +516,47 @@ describe("SignInPage", () => {
     vi.unstubAllEnvs();
   });
 
+  it("renders an empty-state message when every provider is hidden in non-DEV mode", async () => {
+    vi.stubEnv("DEV", false);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    // Both loaders resolve to no-op APIs, neither client ID is set, neither
+    // stub is installed → both providers fall into the prod-mode `"hidden"`
+    // branch.
+    const noopGis: GoogleIdApi = {
+      initialize: () => {},
+      renderButton: () => {
+        throw new Error("renderButton should not be called when hidden");
+      },
+      prompt: () => {},
+      cancel: () => {},
+      disableAutoSelect: () => {},
+    };
+    vi.spyOn(googleModule, "loadGoogleIdentity").mockResolvedValue(noopGis);
+    const noopApple: AppleIdAuthApi = {
+      init: () => {},
+      signIn: () =>
+        Promise.reject(new Error("signIn should not be called in this path")),
+    };
+    vi.spyOn(appleModule, "loadAppleIdentity").mockResolvedValue(noopApple);
+    renderSignIn();
+
+    // The empty-state message renders.
+    await screen.findByTestId("sign-in-unavailable");
+    expect(screen.getByTestId("sign-in-unavailable").textContent).toMatch(
+      /Sign-in is currently unavailable/i,
+    );
+    // Neither button is in the tree.
+    expect(screen.queryByTestId("apple-signin-button")).toBeNull();
+    expect(screen.queryByTestId("google-button-container")).toBeNull();
+    // No dev-flavoured error leaks.
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /not configured for this build/i,
+    );
+    vi.unstubAllEnvs();
+  });
+
   it("Apple user-cancel does not surface a scary error", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(null, { status: 401 }),
