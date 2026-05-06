@@ -151,6 +151,18 @@ the FE side in `SignInPage.tsx`.
 > `GOOGLE_ENABLED=true` on the BE plus `VITE_GOOGLE_ENABLED=true` on
 > the FE for the slice-1 demo to render its Google button.
 
+> **`make dev` path:** the docker-compose stack reads root `.env` (not
+> `frontend-web/.env`) and forwards a fixed list of vars into the `web`
+> container's environment block — `frontend-web/.env` isn't mounted in
+> container mode. The `VITE_*_ENABLED` flags must therefore live in
+> **both** `frontend-web/.env.example` (raw `npm run dev` workflow) and
+> the root `.env.example` + the `web:` service's `environment:` block in
+> `infra/docker/docker-compose.yml` (the `make dev` workflow). When
+> upgrading an existing local stack across this PR, append the three
+> `VITE_*_ENABLED` lines to your root `.env` (or delete-and-recreate it
+> from the updated `.env.example`) — otherwise the flags arrive at the
+> web container as empty strings and the page renders the empty state.
+
 The validator catches the misconfiguration where an unset provider secret
 would silently make every sign-in look like "your token is invalid" (401)
 when the real fault is server config. Per-provider gating preserves the
