@@ -7,11 +7,43 @@ import type { GoogleCredentialResponse } from "../auth/google";
 import { composeAppleDisplayName, loadAppleIdentity } from "../auth/apple";
 import type { AppleSignInResponse } from "../auth/apple";
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
-const APPLE_CLIENT_ID = import.meta.env.VITE_APPLE_CLIENT_ID ?? "";
-const APPLE_REDIRECT_URI = import.meta.env.VITE_APPLE_REDIRECT_URI ?? "";
 const LINK_REQUIRED_MESSAGE =
   "This email is registered with another provider; please sign in with that provider instead.";
+
+// Per-provider FE flags mirror the BE's `*_ENABLED` flags (see
+// docs/auth.md § Per-provider gating). Strict `=== "true"` parse: anything
+// else, including unset, is `false`. The flag is the explicit signal that
+// "this provider is live in this build" — independent of whether a client
+// ID happens to be present. The two-signal model is intentional: the flag
+// decides visibility; the client ID decides whether the rendered button is
+// functional.
+//
+// Behaviour per provider:
+//   ENABLED=false              → button hidden (flag wins, even if CLIENT_ID set)
+//   ENABLED=true + CLIENT_ID   → button renders functional
+//   ENABLED=true + no CLIENT_ID + DEV  → button renders, dev-targeted error
+//   ENABLED=true + no CLIENT_ID + prod → button hidden (safe-prod fallback)
+//
+// Read inline inside the effects (not at module-top) so `vi.stubEnv` in
+// tests can flip them per-case.
+function readGoogleEnabled(): boolean {
+  return import.meta.env.VITE_GOOGLE_ENABLED === "true";
+}
+function readAppleEnabled(): boolean {
+  return import.meta.env.VITE_APPLE_ENABLED === "true";
+}
+function readFacebookEnabled(): boolean {
+  return import.meta.env.VITE_FACEBOOK_ENABLED === "true";
+}
+function readGoogleClientId(): string {
+  return import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
+}
+function readAppleClientId(): string {
+  return import.meta.env.VITE_APPLE_CLIENT_ID ?? "";
+}
+function readAppleRedirectUri(): string {
+  return import.meta.env.VITE_APPLE_REDIRECT_URI ?? "";
+}
 
 // Visual cap applied to both providers' buttons so they line up on
 // `/sign-in` at desktop widths AND fill the column on narrow viewports
@@ -113,7 +145,7 @@ export function SignInPage() {
 
   const initAndRender = useCallback((gis: Awaited<ReturnType<typeof loadGoogleIdentity>>) => {
     gis.initialize({
-      client_id: GOOGLE_CLIENT_ID || "stub-client-id",
+      client_id: readGoogleClientId() || "stub-client-id",
       callback: (resp) => {
         void handleCredentialRef.current(resp);
       },
@@ -139,17 +171,25 @@ export function SignInPage() {
   useEffect(() => {
     if (state.status === "authenticated") return;
     let cancelled = false;
+    // Per-provider flag wins over everything: when GOOGLE_ENABLED=false the
+    // button is hidden regardless of whether VITE_GOOGLE_CLIENT_ID is set.
+    // Skip loading the SDK entirely — a flag-disabled provider has no
+    // reason to fetch a script.
+    if (!readGoogleEnabled()) {
+      setStatus("hidden");
+      return;
+    }
     setStatus("loading-sdk");
     loadGoogleIdentity()
       .then((gis) => {
         if (cancelled) return;
-        if (!GOOGLE_CLIENT_ID && !window.__threadloopGoogleIdStub__) {
-          // Slice-N-only deployments unset VITE_GOOGLE_CLIENT_ID to drop the
-          // Google button. Prod users see no button (matches the
+        if (!readGoogleClientId() && !window.__threadloopGoogleIdStub__) {
+          // GOOGLE_ENABLED=true but VITE_GOOGLE_CLIENT_ID unset: the build
+          // is configured to show the button but the SDK can't bootstrap.
+          // DEV keeps the actionable error so misconfigured local stacks
+          // remain loud; prod hides the button entirely (matches the
           // docs/auth.md § Per-provider gating intent: "the sign-in page
           // renders that provider's button disabled with no scary error").
-          // DEV mode keeps the actionable error so a misconfigured local
-          // stack is loud, not silent.
           if (import.meta.env.DEV) {
             setStatus("error");
             setError(
@@ -244,19 +284,28 @@ export function SignInPage() {
   useEffect(() => {
     if (state.status === "authenticated") return;
     let cancelled = false;
+    // Per-provider flag wins. With Apple descoped (PR #58, 2026-05-04)
+    // VITE_APPLE_ENABLED defaults to `false` so the button is hidden in
+    // every default build — even if a stale VITE_APPLE_CLIENT_ID lingers
+    // in a local `.env`.
+    if (!readAppleEnabled()) {
+      setAppleStatus("hidden");
+      return;
+    }
     setAppleStatus("loading-sdk");
     loadAppleIdentity()
       .then((apple) => {
         if (cancelled) return;
         if (
-          !APPLE_CLIENT_ID &&
+          !readAppleClientId() &&
           !window.__threadloopAppleIdStub__
         ) {
-          // Slice-1-only deployments unset VITE_APPLE_CLIENT_ID to drop the
-          // Apple button. Prod users see no button (matches the
-          // docs/auth.md § Per-provider gating intent). DEV mode keeps the
-          // actionable error so a misconfigured local stack is loud, not
-          // silent. Symmetric with the Google path above.
+          // APPLE_ENABLED=true but VITE_APPLE_CLIENT_ID unset: the build
+          // is configured to show the button but the SDK can't bootstrap.
+          // DEV keeps the actionable error so misconfigured local stacks
+          // remain loud (this is the loud-misconfiguration path for an
+          // active provider); prod hides the button entirely. Symmetric
+          // with Google.
           if (import.meta.env.DEV) {
             setAppleStatus("error");
             setError(
@@ -269,9 +318,9 @@ export function SignInPage() {
         }
         try {
           apple.init({
-            clientId: APPLE_CLIENT_ID || "stub-apple-client-id",
+            clientId: readAppleClientId() || "stub-apple-client-id",
             scope: "name email",
-            redirectURI: APPLE_REDIRECT_URI || window.location.origin,
+            redirectURI: readAppleRedirectUri() || window.location.origin,
             usePopup: true,
           });
           setAppleStatus("ready");
@@ -318,14 +367,27 @@ export function SignInPage() {
 
   const appleDisabled = appleStatus !== "ready" || appleBusy;
 
-  // When every provider's button is hidden in prod (slice-N-only deployments
-  // where neither `VITE_GOOGLE_CLIENT_ID` nor `VITE_APPLE_CLIENT_ID` are set),
-  // the buttons section would otherwise render as blank space below the
-  // "continue with one of the providers below" prose. Substitute a graceful
-  // empty state so users don't read the page as broken. DEV builds keep the
-  // actionable per-provider error messages and do not enter this branch
-  // (one of `status` / `appleStatus` will be `"error"`, not `"hidden"`).
-  const allHidden = status === "hidden" && appleStatus === "hidden";
+  // Per-provider visibility decisions, factored out so the JSX below reads
+  // cleanly. `googleVisible` / `appleVisible` collapse "flag is on AND
+  // we're not in the prod-mode hidden state" into a single boolean each;
+  // `facebookVisible` is the flag alone today (no FB button until #39
+  // wires one). When #39 lands and a fourth provider eventually shows
+  // up, this is the natural inflection point to introduce a
+  // `PROVIDERS = [...].map(...)` data structure — three repetitions
+  // doesn't earn the abstraction yet.
+  const googleVisible = status !== "hidden";
+  const appleVisible = appleStatus !== "hidden";
+  const facebookVisible = readFacebookEnabled();
+
+  // When every provider is disabled (all three `VITE_*_ENABLED=false`, OR
+  // ENABLED=true with client ID unset in prod), the buttons section would
+  // otherwise render as blank space below the "continue with one of the
+  // providers below" prose. Substitute a graceful empty state so users
+  // don't read the page as broken. DEV builds with an active provider
+  // (ENABLED=true) but missing client ID keep the actionable per-provider
+  // error and do not enter this branch (one of the per-provider statuses
+  // will be `"error"`, not `"hidden"`).
+  const allHidden = !googleVisible && !appleVisible && !facebookVisible;
 
   return (
     <main className="flex-1 max-w-md mx-auto w-full px-6 py-16">
@@ -349,7 +411,7 @@ export function SignInPage() {
           </p>
         )}
 
-        {status !== "hidden" && (
+        {googleVisible && (
           <div
             ref={buttonContainerRef}
             data-testid="google-button-container"
@@ -358,7 +420,7 @@ export function SignInPage() {
           />
         )}
 
-        {appleStatus !== "hidden" && (
+        {appleVisible && (
           <div className="mt-3">
             <button
               type="button"
@@ -414,10 +476,15 @@ export function SignInPage() {
           </button>
         )}
 
-        {/* TODO(slice-3/#39): wire Facebook button here. */}
-        <p className="mt-8 text-xs text-neutral-500">
-          Facebook sign-in is coming soon.
-        </p>
+        {/* TODO(slice-3/#39): wire Facebook button here. Until #39 ships
+            an actual button, the placeholder prose is gated on
+            `VITE_FACEBOOK_ENABLED` so a default-config build (Facebook
+            disabled) doesn't tease a feature it can't deliver. */}
+        {facebookVisible && (
+          <p className="mt-8 text-xs text-neutral-500">
+            Facebook sign-in is coming soon.
+          </p>
+        )}
       </section>
     </main>
   );

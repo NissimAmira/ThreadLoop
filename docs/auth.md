@@ -78,37 +78,71 @@ that provider's secrets:
   `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`.
 - `FACEBOOK_ENABLED=true` → `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`.
 
-The web client takes the matching set of `VITE_*` env vars: each provider
-slice that's enabled in a build needs its own client-side identifier so
-the SDK can bootstrap. Mismatched FE/BE values (e.g. a Service ID on the
-FE that disagrees with the BE's `APPLE_CLIENT_ID`) silently fail
-verification at the JWKS step — the BE's `aud` check rejects the token —
-so the deploy story keeps them in lockstep:
+The web client takes the matching set of `VITE_*` env vars in two
+categories: a per-provider **enable flag** that mirrors the BE flag, and
+a per-provider **client ID** that the SDK uses to bootstrap. Mismatched
+FE/BE values (e.g. a Service ID on the FE that disagrees with the BE's
+`APPLE_CLIENT_ID`) silently fail verification at the JWKS step — the BE's
+`aud` check rejects the token — so the deploy story keeps them in
+lockstep:
 
-- `GOOGLE_ENABLED=true` → set `VITE_GOOGLE_CLIENT_ID` (web build) to the
-  same Google project as `GOOGLE_CLIENT_ID` (backend).
-- `APPLE_ENABLED=true` → set `VITE_APPLE_CLIENT_ID` (web build) to the
-  same Service ID as `APPLE_CLIENT_ID` (backend).
-  `VITE_APPLE_REDIRECT_URI` is optional; defaults to
+- `GOOGLE_ENABLED=true` (BE) ↔ `VITE_GOOGLE_ENABLED=true` (FE) +
+  `VITE_GOOGLE_CLIENT_ID` set to the same Google project as
+  `GOOGLE_CLIENT_ID` (BE).
+- `APPLE_ENABLED=true` (BE) ↔ `VITE_APPLE_ENABLED=true` (FE) +
+  `VITE_APPLE_CLIENT_ID` set to the same Service ID as `APPLE_CLIENT_ID`
+  (BE). `VITE_APPLE_REDIRECT_URI` is optional; defaults to
   `window.location.origin` if unset.
-- `FACEBOOK_ENABLED=true` → (slice 3, not yet shipped) will pair a
-  `VITE_FACEBOOK_APP_ID` with `FACEBOOK_APP_ID`.
+- `FACEBOOK_ENABLED=true` (BE) ↔ `VITE_FACEBOOK_ENABLED=true` (FE) +
+  (slice 3, not yet shipped) will pair a `VITE_FACEBOOK_APP_ID` with
+  `FACEBOOK_APP_ID`.
 
-When the FE env var is missing for a provider whose BE flag is on, the
-sign-in page hides that provider's button entirely in a production build
-(no scary error to end users) and shows an actionable developer message
-in `import.meta.env.DEV` so a misconfigured local stack stays loud. The
-other enabled providers still work. If **every** provider's `VITE_*` is
-unset in a prod build (e.g. a misconfigured deploy where no client IDs
-made it through), the page substitutes an empty-state message —
-*"Sign-in is currently unavailable. Please try again later."* — for the
-button slots so users don't read the page as broken.
+The FE flags are an **explicit signal**, not a derived one. Earlier
+slices coupled "is this provider live?" to "is the client ID present?",
+which happened to coincide with reality but didn't scale — Apple's
+descope (PR #58) forced the split: a stale `VITE_APPLE_CLIENT_ID`
+in a local `.env` shouldn't accidentally re-enable a button the build
+isn't meant to ship. Strict `=== "true"` parse on every flag (anything
+else, including unset, is `false`).
+
+Per-provider behaviour matrix (FE side, mirrors the BE table above):
+
+| `VITE_*_ENABLED` | `VITE_*_CLIENT_ID` | Mode | Result |
+| --- | --- | --- | --- |
+| `false` (or unset) | (any) | (any) | Button hidden everywhere — flag wins |
+| `true` | set | (any) | Button renders functional |
+| `true` | unset | DEV | Button renders, dev-targeted "not configured" error — preserves loud-misconfiguration semantics for active providers |
+| `true` | unset | prod | Button hidden — safe-prod fallback |
+
+Slice-1-only deployment example (the demo on main today): set
+`AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` on the backend with
+`GOOGLE_CLIENT_ID` configured, and on the web build set
+`VITE_GOOGLE_ENABLED=true` + `VITE_GOOGLE_CLIENT_ID=…` with
+`VITE_APPLE_ENABLED=false` and `VITE_FACEBOOK_ENABLED=false`. The
+Apple/Facebook secrets and client IDs can be left empty.
+
+If **every** FE flag is `false` in a build (e.g. a misconfigured deploy
+where no provider made it through), the page substitutes an empty-state
+message — *"Sign-in is currently unavailable. Please try again later."*
+— for the button slots so users don't read the page as broken. The
+empty state also fires when every flag is `true` but no client IDs are
+set in a prod build (each provider falls into the safe-prod hide path).
+
+The flag-read happens inline inside `frontend-web/src/pages/SignInPage.tsx`
+(see `readGoogleEnabled` / `readAppleEnabled` / `readFacebookEnabled`).
+A future engineer searching for `APPLE_ENABLED` will find both halves:
+the BE side in `backend/app/config.py` § `Settings.apple_enabled` and
+the FE side in `SignInPage.tsx`.
 
 > **Local dev migration note:** `.env` files copied from before PR #53
-> don't carry the `*_ENABLED` flags and will boot the backend with the
-> entire auth subsystem off (every `/api/auth/*` route 404s — the FE
-> sign-in flow then looks broken). Re-copy `backend/.env.example` and
-> set at minimum `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` for slice 1.
+> don't carry the BE `*_ENABLED` flags and will boot the backend with the
+> entire auth subsystem off; `.env` files copied from before this PR's
+> FE-flag rollout don't carry `VITE_*_ENABLED` and will hide every
+> provider button (every flag defaults to `false` under the strict
+> `=== "true"` parse). Re-copy both `backend/.env.example` and
+> `frontend-web/.env.example` and set at minimum `AUTH_ENABLED=true` +
+> `GOOGLE_ENABLED=true` on the BE plus `VITE_GOOGLE_ENABLED=true` on
+> the FE for the slice-1 demo to render its Google button.
 
 The validator catches the misconfiguration where an unset provider secret
 would silently make every sign-in look like "your token is invalid" (401)
