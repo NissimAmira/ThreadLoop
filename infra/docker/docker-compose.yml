@@ -89,7 +89,12 @@ services:
     restart: unless-stopped
     environment:
       VITE_API_URL: http://localhost:${BACKEND_PORT:-8000}
+      VITE_GOOGLE_ENABLED: ${VITE_GOOGLE_ENABLED:-}
+      VITE_APPLE_ENABLED: ${VITE_APPLE_ENABLED:-}
+      VITE_FACEBOOK_ENABLED: ${VITE_FACEBOOK_ENABLED:-}
       VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+      VITE_APPLE_CLIENT_ID: ${VITE_APPLE_CLIENT_ID:-}
+      VITE_APPLE_REDIRECT_URI: ${VITE_APPLE_REDIRECT_URI:-}
     ports:
       - "5173:5173"
     volumes:
