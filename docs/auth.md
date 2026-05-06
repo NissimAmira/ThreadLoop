@@ -114,6 +114,13 @@ Per-provider behaviour matrix (FE side, mirrors the BE table above):
 | `true` | unset | DEV | Button renders, dev-targeted "not configured" error — preserves loud-misconfiguration semantics for active providers |
 | `true` | unset | prod | Button hidden — safe-prod fallback |
 
+**Side-effect contract:** when `VITE_*_ENABLED=false`, that provider's
+SDK script is never fetched and its global is never touched — the flag
+short-circuits before any `loadGoogleIdentity` / `loadAppleIdentity`
+call. Asserted by the `loadXIdentity not called` tests in
+`SignInPage.test.tsx`. Don't move the flag check after the SDK load:
+a flag-off build must not pull a third-party script over the wire.
+
 Slice-1-only deployment example (the demo on main today): set
 `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` on the backend with
 `GOOGLE_CLIENT_ID` configured, and on the web build set

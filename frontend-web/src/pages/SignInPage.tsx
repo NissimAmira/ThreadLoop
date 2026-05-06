@@ -475,16 +475,6 @@ export function SignInPage() {
             Try again
           </button>
         )}
-
-        {/* TODO(slice-3/#39): wire Facebook button here. Until #39 ships
-            an actual button, the placeholder prose is gated on
-            `VITE_FACEBOOK_ENABLED` so a default-config build (Facebook
-            disabled) doesn't tease a feature it can't deliver. */}
-        {facebookVisible && (
-          <p className="mt-8 text-xs text-neutral-500">
-            Facebook sign-in is coming soon.
-          </p>
-        )}
       </section>
     </main>
   );
