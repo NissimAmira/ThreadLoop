@@ -692,6 +692,48 @@ describe("SignInPage", () => {
     expect(screen.getByTestId("sign-in-error").textContent ?? "").toBe("");
   });
 
+  it("Apple button propagates aria-busy while a sign-in is in flight", async () => {
+    // Parity with the Facebook button; without aria-busy, screen-reader
+    // users get only the disabled state which doesn't announce "in flight".
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise(() => {}),
+    );
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse({
+      authorization: { id_token: "apple-id-token", code: "apple-code" },
+    });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(btn).toHaveAttribute("aria-busy", "false");
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => expect(btn).toHaveAttribute("aria-busy", "true"));
+  });
+
+  it("renders 'Loading Apple sign-in…' while the Apple SDK script is fetching", async () => {
+    // Mirror the Google loading-SDK micro-copy so slow connections don't
+    // see a blank button area.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    // Never-resolving loader keeps the Apple status in `loading-sdk`.
+    vi.spyOn(appleModule, "loadAppleIdentity").mockReturnValue(
+      new Promise(() => {}),
+    );
+    renderSignIn();
+
+    expect(
+      await screen.findByText(/Loading Apple sign-in/i),
+    ).toBeInTheDocument();
+  });
+
   // ---- Facebook (slice 3 / #39) ----
 
   it("renders the Facebook button enabled once init() resolves", async () => {
@@ -706,6 +748,27 @@ describe("SignInPage", () => {
     expect(button).toBeInTheDocument();
     expect(button).toHaveAttribute("aria-label", "Sign in with Facebook");
     await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it("renders 'Loading Facebook sign-in…' while the Facebook SDK script is fetching", async () => {
+    // Mirror the Google loading-SDK micro-copy so slow connections don't
+    // see a blank button area.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    // Drop the default no-op stub so the loader actually runs and stays
+    // pending (rather than short-circuiting via the global stub seam).
+    delete window.__threadloopFacebookIdStub__;
+    vi.spyOn(facebookModule, "loadFacebookIdentity").mockReturnValue(
+      new Promise(() => {}),
+    );
+    renderSignIn();
+
+    expect(
+      await screen.findByText(/Loading Facebook sign-in/i),
+    ).toBeInTheDocument();
   });
 
   it("Facebook flow → posts accessToken and redirects to ?next", async () => {

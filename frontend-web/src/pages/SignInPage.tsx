@@ -558,6 +558,7 @@ export function SignInPage() {
               disabled={appleDisabled}
               data-testid="apple-signin-button"
               aria-label="Sign in with Apple"
+              aria-busy={appleBusy}
               style={{ maxWidth: PROVIDER_BUTTON_MAX_WIDTH_PX }}
               className="w-full inline-flex items-center justify-center gap-2 rounded bg-black px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
             >
@@ -603,6 +604,14 @@ export function SignInPage() {
 
         {status === "loading-sdk" && (
           <p className="mt-4 text-sm text-neutral-500">Loading Google sign-in…</p>
+        )}
+        {appleStatus === "loading-sdk" && (
+          <p className="mt-4 text-sm text-neutral-500">Loading Apple sign-in…</p>
+        )}
+        {facebookStatus === "loading-sdk" && (
+          <p className="mt-4 text-sm text-neutral-500">
+            Loading Facebook sign-in…
+          </p>
         )}
         {status === "exchanging" && (
           <p className="mt-4 text-sm text-neutral-500">Completing sign-in…</p>
