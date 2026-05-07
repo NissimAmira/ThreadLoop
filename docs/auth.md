@@ -94,8 +94,9 @@ lockstep:
   (BE). `VITE_APPLE_REDIRECT_URI` is optional; defaults to
   `window.location.origin` if unset.
 - `FACEBOOK_ENABLED=true` (BE) ↔ `VITE_FACEBOOK_ENABLED=true` (FE) +
-  (slice 3, not yet shipped) will pair a `VITE_FACEBOOK_APP_ID` with
-  `FACEBOOK_APP_ID`.
+  `VITE_FACEBOOK_APP_ID` set to the same Meta App ID as `FACEBOOK_APP_ID`
+  (BE). The BE's `/debug_token` verifier checks `data.app_id` against
+  that value.
 
 The FE flags are an **explicit signal**, not a derived one. Earlier
 slices coupled "is this provider live?" to "is the client ID present?",
@@ -574,11 +575,12 @@ def open_transaction(user: User = Depends(require_buyer)):  # checks can_purchas
 A user can hold both roles simultaneously and switch contexts without
 re-authenticating.
 
-## Web client (slices 1 & 2 — Google + Apple)
+## Web client (slices 1, 2 & 3 — Google + Apple + Facebook)
 
 The web sign-in surface ships in vertical slices (#19, #38, #39, #40). Slice
 1 lands the Google end-to-end demo plus the shared scaffolding all later
-slices reuse; slice 2 (#38) adds the Apple button next to it.
+slices reuse; slice 2 (#38) adds the Apple button next to it; slice 3 (#39)
+adds the Facebook button.
 
 ### Auth context
 
@@ -677,20 +679,73 @@ backend's `is_private_email` bypass means the relay account always lands
 as a fresh identity, and the FE just renders whatever email the BE
 returned on `/me`.
 
+### Facebook Login SDK
+
+`frontend-web/src/auth/facebook.ts` mirrors the Google/Apple loaders: it
+lazy-loads `https://connect.facebook.net/en_US/sdk.js` on first need and
+exposes a typed `loadFacebookIdentity()` promise. Tests + Cypress install
+`window.__threadloopFacebookIdStub__` before mount, same stub seam as the
+Google + Apple SDKs.
+
+The page renders its own Tailwind-styled button (white "f" glyph + white
+"Continue with Facebook" text on `#1877F2` — Meta's own preferred wording
+per their brand guidelines, which is intentionally different from
+"Sign in with Apple" / "Sign in with Google" because each provider's
+brand guideline mandates a slightly different verb). The brand colour is
+extended into the Tailwind theme as `bg-facebook` / `bg-facebook-dark` /
+`focus:ring-facebook` rather than inlined as a hex literal — same
+discipline the rest of the codebase keeps for theme tokens.
+
+`FB.login(cb, { scope: "email" })` resolves with
+`{ status, authResponse: { accessToken, ... } | null }`. The page posts
+`{ accessToken }` to `POST /api/auth/facebook/callback`; the BE re-validates
+against Graph API (`/debug_token` then `/me`). A `status` other than
+`"connected"` (user closed the popup, denied the app, network blip) is
+treated as a silent cancel — error region stays empty, button reverts to
+clickable. Mirrors Apple's user-cancel posture.
+
+`VITE_FACEBOOK_APP_ID` is required at runtime in real builds; when unset,
+the Facebook button renders disabled in DEV with an actionable error
+("Facebook sign-in is not configured for this build…") and is hidden in
+prod (safe-prod fallback). Same dev-loud / prod-hide pattern as the other
+two providers.
+
+The 503 failure copy diverges from Google/Apple by appending *"in a few
+minutes"* — Facebook has no JWKS rotation recovery (the trust anchor is
+Graph itself, see § Facebook specifics), so an immediate retry won't help
+and the copy sets that expectation explicitly. The 401 copy matches the
+Google/Apple precedent verbatim with the provider name swapped.
+
+**Email-permission decline (no FE-side branching in slice 3):** Facebook
+lets the user decline the `email` scope at consent time. The BE handles
+that case (creates a row with `email=None`, fallback display name
+`name → "ThreadLoop user"`) and the FE just lets sign-in complete; `/me`
+renders the display name without an email line. The "ask the user to
+re-grant email permission" reconsent prompt is deferred to a future
+account-recovery Epic, where it has a real destination — adding a
+nag-prompt for a feature that doesn't exist yet would be friction without
+purpose. See ux-designer advisory on #39 § 1 for the full reasoning.
+
+`link_required` responses on the Facebook branch surface the same
+generic message as Google + Apple (slice 4 / #40 will replace it with
+the full re-auth UI). In practice the branch is unreachable for Facebook
+because Graph API doesn't expose `email_verified` and the BE treats every
+Facebook email as unverified — see § Facebook specifics for the full
+analysis. The handling is kept verbatim so a future Graph response shape
+change plugs in cleanly.
+
 ### Out of scope here
 
-The Facebook sign-in button (#39) and the full `link_required` linking UI
-(#40) ship in their own slices. Slices 1 and 2's `link_required` handling
-is a generic error message ("This email is registered with another
-provider; please sign in with that provider instead") with no second-step
-re-auth — enough to validate the contract surface without prematurely
-building UI that #40 will rework.
+The full `link_required` linking UI (#40) ships in its own slice. Slices
+1, 2 & 3's `link_required` handling is a generic error message ("This
+email is registered with another provider; please sign in with that
+provider instead") with no second-step re-auth — enough to validate the
+contract surface without prematurely building UI that #40 will rework.
 
 ## What's not implemented yet
 
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
-- Facebook sign-in button on web (slice 3 / #39).
 - Full `link_required` linking UI flow on web (slice 4 / #40).
 - Mobile SDK integration (#20).
 - Account-linking *resolution* — `POST /api/auth/link` (#18). Detection is
@@ -735,7 +790,7 @@ Already landed:
   Google flow and asserts the user lands on `/me`. `link_required`
   responses surface as a generic error string — the linking UI itself is
   slice 4 (#40). Auth context conventions documented above under
-  "Web client (slices 1 & 2 — Google + Apple)".
+  "Web client (slices 1, 2 & 3 — Google + Apple + Facebook)".
 - **Slice-2 FE** (#38) — *shipped to main 2026-05-04, deferred from
   product*: Apple sign-in button on `/sign-in` next to the Google one,
   wired via the Sign in with Apple JS SDK. Posts `{ idToken, code,
@@ -754,6 +809,24 @@ Already landed:
   branches of the auth surface continue to be exercised by tests and
   by the dev stack (when an operator opts in by setting the flag and
   secrets locally).
+- **Slice-3 FE** (#39): Facebook sign-in button on `/sign-in` next to
+  the Google + Apple ones, wired via the Facebook Login SDK
+  (`https://connect.facebook.net/en_US/sdk.js`). Posts `{ accessToken }`
+  to `POST /api/auth/facebook/callback`; on success follows the same
+  redirect path as Google + Apple (`?next=` or `/`). The `email`
+  permission is requested but optional — when the user declines it, the
+  BE persists `email=null` and the FE just lets sign-in complete (the
+  reconsent prompt is deferred to a future account-recovery Epic). The
+  503 failure copy diverges from Google/Apple by appending *"in a few
+  minutes"* — Facebook has no JWKS rotation recovery so an immediate
+  retry won't help. New env vars: `VITE_FACEBOOK_ENABLED` and
+  `VITE_FACEBOOK_APP_ID` (required when `FACEBOOK_ENABLED=true`).
+  Brand colour `#1877F2` lives in `tailwind.config.js` as the
+  `facebook` token. Cypress smoke at
+  `cypress/e2e/sign-in-facebook.cy.ts`. **Disabled by default in every
+  deployment** (`FACEBOOK_ENABLED=false`) until a registered Meta App
+  ID is wired into both the BE and FE flag pair — the live demo flip
+  is gated on Meta App registration.
 - **camelCase wire shape** (#44): the contract drift between
   `shared/openapi.yaml` (snake) and `shared/src/types/` (camel) inherited
   from #12 was resolved by flipping the wire to camelCase via Pydantic

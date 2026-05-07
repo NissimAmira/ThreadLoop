@@ -1,5 +1,6 @@
 import type {
   AppleSsoCallbackInput,
+  FacebookSsoCallbackInput,
   HealthResponse,
   Session,
   User,
@@ -92,6 +93,18 @@ export const api = {
      */
     appleCallback: (input: AppleSsoCallbackInput): Promise<Session> =>
       request<Session>("/api/auth/apple/callback", {
+        method: "POST",
+        body: input,
+      }),
+
+    /**
+     * POST /api/auth/facebook/callback — exchange a Facebook user access
+     * token for a session. The backend re-validates against Graph API
+     * (`/debug_token` then `/me`); this client posts the user access token
+     * surfaced by `FB.login()` and trusts the BE to do the heavy lifting.
+     */
+    facebookCallback: (input: FacebookSsoCallbackInput): Promise<Session> =>
+      request<Session>("/api/auth/facebook/callback", {
         method: "POST",
         body: input,
       }),

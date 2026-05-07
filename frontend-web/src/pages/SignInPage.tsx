@@ -6,6 +6,8 @@ import { loadGoogleIdentity } from "../auth/google";
 import type { GoogleCredentialResponse } from "../auth/google";
 import { composeAppleDisplayName, loadAppleIdentity } from "../auth/apple";
 import type { AppleSignInResponse } from "../auth/apple";
+import { loadFacebookIdentity } from "../auth/facebook";
+import type { FacebookLoginResponse } from "../auth/facebook";
 
 const LINK_REQUIRED_MESSAGE =
   "This email is registered with another provider; please sign in with that provider instead.";
@@ -44,6 +46,9 @@ function readAppleClientId(): string {
 function readAppleRedirectUri(): string {
   return import.meta.env.VITE_APPLE_REDIRECT_URI ?? "";
 }
+function readFacebookAppId(): string {
+  return import.meta.env.VITE_FACEBOOK_APP_ID ?? "";
+}
 
 // Visual cap applied to both providers' buttons so they line up on
 // `/sign-in` at desktop widths AND fill the column on narrow viewports
@@ -67,6 +72,7 @@ type Status =
   | "error"
   | "hidden";
 type AppleStatus = "idle" | "loading-sdk" | "ready" | "error" | "hidden";
+type FacebookStatus = "idle" | "loading-sdk" | "ready" | "error" | "hidden";
 
 /**
  * Constrain `?next=` to same-origin app paths. Anything else (protocol-relative
@@ -94,6 +100,9 @@ export function SignInPage() {
 
   const [appleStatus, setAppleStatus] = useState<AppleStatus>("idle");
   const [appleBusy, setAppleBusy] = useState(false);
+
+  const [facebookStatus, setFacebookStatus] = useState<FacebookStatus>("idle");
+  const [facebookBusy, setFacebookBusy] = useState(false);
 
   // Already signed in? Bounce to `next`. Effect rather than render guard so
   // we don't violate the rules of hooks below.
@@ -367,17 +376,138 @@ export function SignInPage() {
 
   const appleDisabled = appleStatus !== "ready" || appleBusy;
 
+  // ---- Facebook (slice 3 / #39) ----
+
+  const handleFacebookResponse = useCallback(
+    async (resp: FacebookLoginResponse) => {
+      // Cancel / decline / unknown — popup closed or user denied. Reset
+      // silently so the button is click-able again. Mirrors Apple's
+      // user-cancel handling (no scary error pill).
+      if (resp.status !== "connected" || !resp.authResponse) {
+        return;
+      }
+      setError(null);
+      try {
+        const session = await api.auth.facebookCallback({
+          accessToken: resp.authResponse.accessToken,
+        });
+        if (session.linkRequired) {
+          // Per docs/auth.md § Facebook specifics this branch is unreachable
+          // in practice (Graph API doesn't expose `email_verified` so the
+          // collision check never fires), but the contract field is
+          // there — surface the slice-1/2 generic message defensively.
+          setError(LINK_REQUIRED_MESSAGE);
+          return;
+        }
+        signIn(session);
+        navigate(next, { replace: true });
+      } catch (err) {
+        if (err instanceof ApiError) {
+          // The 503 copy intentionally diverges from Google/Apple by
+          // appending "in a few minutes" — Facebook has no JWKS rotation
+          // recovery (the trust anchor is Graph itself), so an immediate
+          // retry won't help. See ux-designer advisory on #39 § 4.
+          setError(
+            err.status === 401
+              ? "Facebook sign-in was rejected. Please try again."
+              : err.status === 503
+                ? "Facebook sign-in is temporarily unavailable. Please try again in a few minutes."
+                : err.message,
+          );
+        } else {
+          setError("Could not complete sign-in. Please try again.");
+        }
+      }
+    },
+    [signIn, navigate, next],
+  );
+
+  // Init Facebook on mount. The official SDK exposes `init({ appId, version })`
+  // that has to fire before `login()`. We render our own Tailwind-styled
+  // button (white "f" glyph + "Continue with Facebook" — Meta's own preferred
+  // wording per their brand guidelines) rather than a declarative SDK widget.
+  useEffect(() => {
+    if (state.status === "authenticated") return;
+    let cancelled = false;
+    if (!readFacebookEnabled()) {
+      setFacebookStatus("hidden");
+      return;
+    }
+    setFacebookStatus("loading-sdk");
+    loadFacebookIdentity()
+      .then((fb) => {
+        if (cancelled) return;
+        if (
+          !readFacebookAppId() &&
+          !window.__threadloopFacebookIdStub__
+        ) {
+          // FACEBOOK_ENABLED=true but VITE_FACEBOOK_APP_ID unset: same
+          // dev-loud / prod-hide pattern as Google + Apple.
+          if (import.meta.env.DEV) {
+            setFacebookStatus("error");
+            setError(
+              "Facebook sign-in is not configured for this build. Set VITE_FACEBOOK_APP_ID and reload.",
+            );
+          } else {
+            setFacebookStatus("hidden");
+          }
+          return;
+        }
+        try {
+          fb.init({
+            appId: readFacebookAppId() || "stub-facebook-app-id",
+            version: "v19.0",
+            cookie: true,
+            xfbml: false,
+          });
+          setFacebookStatus("ready");
+        } catch {
+          setFacebookStatus("error");
+          setError("Could not initialize Facebook sign-in. Please retry.");
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFacebookStatus("error");
+        setError("Could not load Facebook sign-in. Please retry.");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleFacebookClick = useCallback(async () => {
+    if (facebookStatus !== "ready" || facebookBusy) return;
+    setFacebookBusy(true);
+    setError(null);
+    try {
+      const fb = await loadFacebookIdentity();
+      // FB.login is callback-based; wrap in a Promise so we can `await`
+      // the response and catch errors uniformly with the rest of the flow.
+      const resp = await new Promise<FacebookLoginResponse>((resolve) => {
+        fb.login((r) => resolve(r), { scope: "email" });
+      });
+      await handleFacebookResponse(resp);
+    } catch {
+      setError("Could not start Facebook sign-in. Please try again.");
+    } finally {
+      setFacebookBusy(false);
+    }
+  }, [facebookStatus, facebookBusy, handleFacebookResponse]);
+
+  const facebookDisabled = facebookStatus !== "ready" || facebookBusy;
+
   // Per-provider visibility decisions, factored out so the JSX below reads
-  // cleanly. `googleVisible` / `appleVisible` collapse "flag is on AND
-  // we're not in the prod-mode hidden state" into a single boolean each;
-  // `facebookVisible` is the flag alone today (no FB button until #39
-  // wires one). When #39 lands and a fourth provider eventually shows
-  // up, this is the natural inflection point to introduce a
-  // `PROVIDERS = [...].map(...)` data structure — three repetitions
-  // doesn't earn the abstraction yet.
+  // cleanly. `googleVisible` / `appleVisible` / `facebookVisible` each
+  // collapse "flag is on AND we're not in the prod-mode hidden state"
+  // into a single boolean. With slice 3 (#39) shipped, all three providers
+  // share the same status-machine shape — three repetitions doesn't yet
+  // earn a `PROVIDERS = [...].map(...)` abstraction (the brand-guideline
+  // forks per provider make a uniform model awkward).
   const googleVisible = status !== "hidden";
   const appleVisible = appleStatus !== "hidden";
-  const facebookVisible = readFacebookEnabled();
+  const facebookVisible = facebookStatus !== "hidden";
 
   // When every provider is disabled (all three `VITE_*_ENABLED=false`, OR
   // ENABLED=true with client ID unset in prod), the buttons section would
@@ -445,6 +575,32 @@ export function SignInPage() {
           </div>
         )}
 
+        {facebookVisible && (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => void handleFacebookClick()}
+              disabled={facebookDisabled}
+              data-testid="facebook-signin-button"
+              aria-label="Sign in with Facebook"
+              aria-busy={facebookBusy}
+              style={{ maxWidth: PROVIDER_BUTTON_MAX_WIDTH_PX }}
+              className="w-full inline-flex items-center justify-center gap-2 rounded bg-facebook px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-facebook-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-facebook disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                viewBox="0 0 16 16"
+                className="h-[18px] w-[18px]"
+                fill="currentColor"
+              >
+                <path d="M16 8.049c0-4.446-3.582-8.05-8-8.05C3.58 0-.002 3.603-.002 8.05c0 4.017 2.926 7.347 6.75 7.951v-5.625h-2.03V8.05H6.75V6.275c0-2.017 1.195-3.131 3.022-3.131.876 0 1.791.157 1.791.157v1.98h-1.009c-.993 0-1.303.621-1.303 1.258v1.51h2.218l-.354 2.326H9.25V16c3.824-.604 6.75-3.934 6.75-7.951" />
+              </svg>
+              <span>Continue with Facebook</span>
+            </button>
+          </div>
+        )}
+
         {status === "loading-sdk" && (
           <p className="mt-4 text-sm text-neutral-500">Loading Google sign-in…</p>
         )}
@@ -454,6 +610,14 @@ export function SignInPage() {
         {appleBusy && (
           <p className="mt-4 text-sm text-neutral-500" data-testid="apple-busy">
             Completing Apple sign-in…
+          </p>
+        )}
+        {facebookBusy && (
+          <p
+            className="mt-4 text-sm text-neutral-500"
+            data-testid="facebook-busy"
+          >
+            Completing Facebook sign-in…
           </p>
         )}
 
