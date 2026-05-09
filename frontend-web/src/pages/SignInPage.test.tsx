@@ -6,6 +6,8 @@ import type { GoogleCredentialResponse, GoogleIdApi } from "../auth/google";
 import * as googleModule from "../auth/google";
 import type { AppleIdAuthApi, AppleSignInResponse } from "../auth/apple";
 import * as appleModule from "../auth/apple";
+import type { FacebookLoginResponse, FacebookSdkApi } from "../auth/facebook";
+import * as facebookModule from "../auth/facebook";
 import { SignInPage, safeNext } from "./SignInPage";
 import { MePage } from "./MePage";
 
@@ -77,6 +79,34 @@ function installAppleStub(): AppleStubHandle {
   };
 }
 
+interface FacebookStubHandle {
+  api: FacebookSdkApi;
+  setNextResponse: (resp: FacebookLoginResponse) => void;
+  initCalled: () => boolean;
+}
+
+function installFacebookStub(): FacebookStubHandle {
+  let nextResponse: FacebookLoginResponse = {
+    status: "connected",
+    authResponse: { accessToken: "stub-fb-token", userID: "1" },
+  };
+  let initCalled = false;
+  const stub: FacebookSdkApi = {
+    init: () => {
+      initCalled = true;
+    },
+    login: (cb) => cb(nextResponse),
+  };
+  window.__threadloopFacebookIdStub__ = stub;
+  return {
+    api: stub,
+    setNextResponse: (resp) => {
+      nextResponse = resp;
+    },
+    initCalled: () => initCalled,
+  };
+}
+
 // Wire is camelCase per ADR 0009 — keys mirror what the backend serializes.
 const wireUser = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -117,12 +147,21 @@ describe("SignInPage", () => {
   beforeEach(() => {
     delete window.__threadloopGoogleIdStub__;
     delete window.__threadloopAppleIdStub__;
-    // Default test bench mirrors a build that has Google + Apple wired up
-    // and Facebook still pending (#39). Individual tests override these
-    // when they specifically exercise a flag-flip path.
+    delete window.__threadloopFacebookIdStub__;
+    // Default test bench mirrors a build with all three providers wired up
+    // (slice 3 / #39 shipped). Individual tests override these when they
+    // specifically exercise a flag-flip path.
     vi.stubEnv("VITE_GOOGLE_ENABLED", "true");
     vi.stubEnv("VITE_APPLE_ENABLED", "true");
-    vi.stubEnv("VITE_FACEBOOK_ENABLED", "false");
+    vi.stubEnv("VITE_FACEBOOK_ENABLED", "true");
+    vi.stubEnv("VITE_FACEBOOK_APP_ID", "stub-fb-app-id");
+    // Default Facebook stub keeps tests that don't exercise the FB flow
+    // from blowing up trying to fetch the real SDK. Tests that *do*
+    // exercise FB call `installFacebookStub()` which overwrites this.
+    window.__threadloopFacebookIdStub__ = {
+      init: () => {},
+      login: () => {},
+    };
   });
 
   afterEach(() => {
@@ -130,6 +169,7 @@ describe("SignInPage", () => {
     vi.unstubAllEnvs();
     delete window.__threadloopGoogleIdStub__;
     delete window.__threadloopAppleIdStub__;
+    delete window.__threadloopFacebookIdStub__;
   });
 
   it("renders a Google button via the GIS stub once anonymous", async () => {
@@ -650,6 +690,398 @@ describe("SignInPage", () => {
     // Give the click handler a chance to settle.
     await waitFor(() => expect(btn).not.toBeDisabled());
     expect(screen.getByTestId("sign-in-error").textContent ?? "").toBe("");
+  });
+
+  it("Apple button propagates aria-busy while a sign-in is in flight", async () => {
+    // Parity with the Facebook button; without aria-busy, screen-reader
+    // users get only the disabled state which doesn't announce "in flight".
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise(() => {}),
+    );
+    installGisStub();
+    const apple = installAppleStub();
+    apple.setNextResponse({
+      authorization: { id_token: "apple-id-token", code: "apple-code" },
+    });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("apple-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(btn).toHaveAttribute("aria-busy", "false");
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => expect(btn).toHaveAttribute("aria-busy", "true"));
+  });
+
+  it("renders 'Loading Apple sign-in…' while the Apple SDK script is fetching", async () => {
+    // Mirror the Google loading-SDK micro-copy so slow connections don't
+    // see a blank button area.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    // Never-resolving loader keeps the Apple status in `loading-sdk`.
+    vi.spyOn(appleModule, "loadAppleIdentity").mockReturnValue(
+      new Promise(() => {}),
+    );
+    renderSignIn();
+
+    expect(
+      await screen.findByText(/Loading Apple sign-in/i),
+    ).toBeInTheDocument();
+  });
+
+  // ---- Facebook (slice 3 / #39) ----
+
+  it("renders the Facebook button enabled once init() resolves", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    installFacebookStub();
+    renderSignIn();
+    const button = await screen.findByTestId("facebook-signin-button");
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveAttribute("aria-label", "Sign in with Facebook");
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it("renders 'Loading Facebook sign-in…' while the Facebook SDK script is fetching", async () => {
+    // Mirror the Google loading-SDK micro-copy so slow connections don't
+    // see a blank button area.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    // Drop the default no-op stub so the loader actually runs and stays
+    // pending (rather than short-circuiting via the global stub seam).
+    delete window.__threadloopFacebookIdStub__;
+    vi.spyOn(facebookModule, "loadFacebookIdentity").mockReturnValue(
+      new Promise(() => {}),
+    );
+    renderSignIn();
+
+    expect(
+      await screen.findByText(/Loading Facebook sign-in/i),
+    ).toBeInTheDocument();
+  });
+
+  it("Facebook flow → posts accessToken and redirects to ?next", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockImplementation((input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/facebook/callback")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              linkRequired: false,
+              accessToken: "access-jwt",
+              expiresAt: "2030-01-01T00:00:00Z",
+              user: { ...wireUser, provider: "facebook", emailVerified: false },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    installAppleStub();
+    const fb = installFacebookStub();
+    fb.setNextResponse({
+      status: "connected",
+      authResponse: { accessToken: "fb-user-token", userID: "42" },
+    });
+    renderSignIn("/sign-in?next=/me");
+
+    const btn = await screen.findByTestId("facebook-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("me-display-name").textContent).toBe(
+        "Ada Lovelace",
+      );
+    });
+
+    const fbCall = fetchMock.mock.calls.find((c) =>
+      typeof c[0] === "string"
+        ? c[0].includes("/api/auth/facebook/callback")
+        : false,
+    );
+    expect(fbCall).toBeDefined();
+    const init = fbCall![1] as RequestInit;
+    expect(init.body).toBe(JSON.stringify({ accessToken: "fb-user-token" }));
+  });
+
+  it("Facebook email-permission-decline (BE returns email=null) signs in cleanly", async () => {
+    const noEmailUser = {
+      ...wireUser,
+      provider: "facebook",
+      email: null,
+      emailVerified: false,
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/facebook/callback")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              linkRequired: false,
+              accessToken: "access-jwt",
+              expiresAt: "2030-01-01T00:00:00Z",
+              user: noEmailUser,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    installAppleStub();
+    const fb = installFacebookStub();
+    fb.setNextResponse({
+      status: "connected",
+      authResponse: { accessToken: "fb-user-token", userID: "42" },
+    });
+    renderSignIn("/sign-in?next=/me");
+
+    const btn = await screen.findByTestId("facebook-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    // Lands on /me without erroring (display_name fallback covers the
+    // missing email — BE keeps display_name even when email is null).
+    await waitFor(() => {
+      expect(screen.getByTestId("me-display-name").textContent).toBe(
+        "Ada Lovelace",
+      );
+    });
+  });
+
+  it("Facebook 401 surfaces the rejected-token retry message", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/facebook/callback")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ code: "invalid_token", message: "bad" }),
+            { status: 401, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    installAppleStub();
+    const fb = installFacebookStub();
+    fb.setNextResponse({
+      status: "connected",
+      authResponse: { accessToken: "fb-user-token", userID: "42" },
+    });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("facebook-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Facebook sign-in was rejected/i,
+      );
+    });
+  });
+
+  it("Facebook 503 surfaces the FB-specific 'in a few minutes' copy", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (url.includes("/api/auth/refresh")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      if (url.includes("/api/auth/facebook/callback")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: "graph_api_unavailable",
+              message: "down",
+            }),
+            { status: 503, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    installGisStub();
+    installAppleStub();
+    const fb = installFacebookStub();
+    fb.setNextResponse({
+      status: "connected",
+      authResponse: { accessToken: "fb-user-token", userID: "42" },
+    });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("facebook-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    // FB-specific copy: "in a few minutes" (vs. Google/Apple which omit it).
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Facebook sign-in is temporarily unavailable\. Please try again in a few minutes/i,
+      );
+    });
+  });
+
+  it("Facebook user-cancel (status != 'connected') does not surface a scary error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    const fb = installFacebookStub();
+    fb.setNextResponse({ status: "unknown", authResponse: null });
+    renderSignIn();
+
+    const btn = await screen.findByTestId("facebook-signin-button");
+    await waitFor(() => expect(btn).not.toBeDisabled());
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").toBe("");
+  });
+
+  it("hides the Facebook button when VITE_FACEBOOK_ENABLED=false (flag wins over a set app id)", async () => {
+    vi.stubEnv("VITE_FACEBOOK_ENABLED", "false");
+    vi.stubEnv("VITE_FACEBOOK_APP_ID", "stub-fb-app-id");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    // If the flag-gate works, the Facebook loader should NEVER be called.
+    const loaderSpy = vi.spyOn(facebookModule, "loadFacebookIdentity");
+    renderSignIn();
+
+    // Other providers settle so the page renders.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Sign in with Google")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("facebook-signin-button")).toBeNull();
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /Facebook sign-in is not configured for this build/i,
+    );
+    expect(loaderSpy).not.toHaveBeenCalled();
+  });
+
+  it("VITE_FACEBOOK_ENABLED=true + missing app id + DEV mode surfaces the actionable developer error", async () => {
+    vi.stubEnv("VITE_FACEBOOK_ENABLED", "true");
+    vi.stubEnv("VITE_FACEBOOK_APP_ID", "");
+    vi.stubEnv("DEV", true);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    // Don't install the FB stub — drive the missing-app-id branch via a
+    // loader that resolves to a no-op API surface.
+    delete window.__threadloopFacebookIdStub__;
+    const noopApi: FacebookSdkApi = {
+      init: () => {},
+      login: () => {
+        throw new Error("login should not be called in this path");
+      },
+    };
+    vi.spyOn(facebookModule, "loadFacebookIdentity").mockResolvedValue(noopApi);
+    renderSignIn();
+
+    const button = await screen.findByTestId("facebook-signin-button");
+    expect(button).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
+        /Facebook sign-in is not configured for this build/i,
+      );
+    });
+    expect(button).toBeDisabled();
+  });
+
+  it("hides the Facebook button entirely (no dev error) when app id is unset in non-DEV mode", async () => {
+    vi.stubEnv("VITE_FACEBOOK_APP_ID", "");
+    vi.stubEnv("DEV", false);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 }),
+    );
+    installGisStub();
+    installAppleStub();
+    delete window.__threadloopFacebookIdStub__;
+    const noopApi: FacebookSdkApi = {
+      init: () => {},
+      login: () => {
+        throw new Error("login should not be called in this path");
+      },
+    };
+    vi.spyOn(facebookModule, "loadFacebookIdentity").mockResolvedValue(noopApi);
+    renderSignIn();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Sign in with Google")).toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("facebook-signin-button")).toBeNull(),
+    );
+    expect(screen.getByTestId("sign-in-error").textContent ?? "").not.toMatch(
+      /not configured for this build/i,
+    );
+    vi.unstubAllEnvs();
   });
 });
 
