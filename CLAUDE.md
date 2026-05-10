@@ -34,9 +34,12 @@ GitHub App, production Dockerfiles, phased DevOps roadmap, docs-as-part-of-done
 policy, local CR subagent, task management via GitHub Projects + RFC/ADR
 conventions, and a multi-agent dev cycle simulating a real product team.
 
-**Auth (Epic #11) is partially shipped — slice 1 (Google web end-to-end) is
-live.** A user can hit `/sign-in`, sign in with Google, land on `/me` showing
-their display name, refresh, and log out. What's in main today:
+**Auth (Epic #11) is partially shipped — Google (slice 1) and Facebook
+(slice 3) web sign-in are live; Apple (slice 2) shipped descoped: code is
+in main but gated off behind `APPLE_ENABLED=false` / `VITE_APPLE_ENABLED=false`
+awaiting Apple Developer Program enrollment.** A user can hit `/sign-in`,
+sign in with Google or Facebook, land on `/me` showing their display name,
+refresh, and log out. What's in main today:
 
 - All three provider callbacks on the backend (`POST /api/auth/{google,apple,facebook}/callback`)
   with provider-specific verifiers (Google + Apple JWKS, Facebook Graph API
@@ -45,25 +48,30 @@ their display name, refresh, and log out. What's in main today:
   `POST /api/auth/logout` (idempotent), `GET /api/me`, `require_user` bearer-JWT dep.
 - `refresh_tokens` table with HMAC-SHA-256-hashed-at-rest tokens, 30-day TTL,
   cascade-on-user-delete.
-- Web: `/sign-in` page with the Google button (Google Identity Services SDK),
+- Web: `/sign-in` page with Google and Facebook buttons rendering functional
+  by default (Google Identity Services SDK + Facebook Login JS SDK); Apple
+  button shipped but hidden in default config (`VITE_APPLE_ENABLED=false`);
   `/me` page, `useAuth()` context with silent-refresh on first paint, Cypress
-  smoke covering the full Google flow.
+  smokes covering the Google, Facebook, and Apple (stub) flows end-to-end.
 - Wire shape: **camelCase end-to-end** (Pydantic `alias_generator=to_camel`,
   see [ADR 0009](./docs/adrs/0009-camelcase-on-the-wire.md)). The shared TS
   types in `@threadloop/shared` are consumed directly by the web client with
   no per-endpoint adapter.
 
-**Still pending in Epic #11:** Apple sign-in button on web (#38), Facebook
-button on web (#39), full `link_required` linking UI (#40 + BE #18), and the
-mobile SDK integrations (#20). Slice-by-slice rollout per RFC 0001, gated
-by per-provider feature flags as BE+FE pairs (BE: `GOOGLE_ENABLED` /
-`APPLE_ENABLED` / `FACEBOOK_ENABLED`; FE: `VITE_GOOGLE_ENABLED` /
-`VITE_APPLE_ENABLED` / `VITE_FACEBOOK_ENABLED`) so each slice's deployment
-only requires that provider's secrets — slice 1 boots with
-`AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` + `VITE_GOOGLE_ENABLED=true`
-and no Apple/FB values. See [`docs/auth.md`](./docs/auth.md) "Per-provider
-gating" + "What's not implemented yet" for the full list and `feat/auth-sso`
-Epic #11 for issue tracking.
+**Still pending in Epic #11:** full `link_required` linking UI (slice 4:
+#40 + BE #18) and the mobile SDK integrations (slice 5: #20). Slice-by-slice
+rollout per RFC 0001, gated by per-provider feature flags as BE+FE pairs
+(BE: `GOOGLE_ENABLED` / `APPLE_ENABLED` / `FACEBOOK_ENABLED`; FE:
+`VITE_GOOGLE_ENABLED` / `VITE_APPLE_ENABLED` / `VITE_FACEBOOK_ENABLED`) so
+each slice's deployment only requires that provider's secrets — a
+Google-only deploy boots with `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` +
+`VITE_GOOGLE_ENABLED=true` and no Apple/FB values; the Google + Facebook
+deploy currently in main additionally flips `FACEBOOK_ENABLED=true` +
+`VITE_FACEBOOK_ENABLED=true` with `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` /
+`VITE_FACEBOOK_APP_ID` configured against a Meta App. See
+[`docs/auth.md`](./docs/auth.md) "Per-provider gating" + "What's not
+implemented yet" for the full list and `feat/auth-sso` Epic #11 for issue
+tracking.
 
 **Other product features** (listings, search, transactions, AR viewer) still
 have **schemas and design docs but no implementation yet** — each domain doc
