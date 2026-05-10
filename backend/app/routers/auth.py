@@ -21,6 +21,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 
+from authlib.jose.errors import JoseError
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -680,7 +681,10 @@ def link_account(
             _INVALID_LINK_MESSAGE,
             status.HTTP_401_UNAUTHORIZED,
         ) from None
-    except Exception as exc:  # noqa: BLE001 — authlib JoseError + subtypes
+    except JoseError as exc:
+        # Narrow on purpose: any non-JoseError, non-LinkToken* failure inside
+        # `decode_link_token` is an unexpected bug we want surfaced as 500,
+        # not silently masked as a 401 link-token failure.
         logger.info("Link rejected: %s (%s)", "link_token_signature_or_parse", exc)
         raise _http_error(
             "invalid_link_token",
@@ -782,6 +786,13 @@ def link_account(
             existing_user.id,
             pre_existing.id,
         )
+        # Deliberate: do NOT record the jti in `consumed_link_tokens` on the
+        # 409 path. The user holds a still-valid link token but the merge
+        # target is taken; letting the token survive until its short TTL
+        # means the legitimate user can re-attempt with a different
+        # second-provider account without re-running the original-provider
+        # callback. The token is harmless to retain — it can only ever
+        # produce another 409 against the same conflicting identity.
         raise _http_error(
             "identity_already_linked",
             "The second-provider identity is already linked to another account.",
@@ -846,6 +857,9 @@ def link_account(
             _INVALID_LINK_MESSAGE,
             status.HTTP_401_UNAUTHORIZED,
         ) from None
+    # `expire_on_commit=True` (the SQLAlchemy default) just marked
+    # `existing_user`'s attributes stale; refresh so `UserOut.model_validate`
+    # below sees the post-commit row, including any side-effects of the merge.
     db.refresh(existing_user)
 
     return Session(
