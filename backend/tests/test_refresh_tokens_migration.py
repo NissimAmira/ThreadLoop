@@ -31,12 +31,15 @@ def _alembic_config(url: str) -> Config:
 
 
 def test_migration_round_trip(pg_url: str) -> None:
-    """Upgrade head, downgrade -1, upgrade head again. At each step verify
-    `refresh_tokens` exists or is gone as expected.
+    """Upgrade head, downgrade through 0002 to 0001, upgrade head again. At
+    each step verify `refresh_tokens` exists or is gone as expected.
 
     This catches the case where someone edits the model and forgets a
     follow-up migration, or breaks `downgrade()` for the refresh_tokens
-    revision."""
+    revision. Updated by #18: head is 0003 now, so `downgrade -1` lands on
+    0002 (where `refresh_tokens` still exists). To test the
+    refresh_tokens revision specifically, downgrade explicitly to 0001.
+    """
     cfg = _alembic_config(pg_url)
     engine = create_engine(pg_url)
 
@@ -44,11 +47,11 @@ def test_migration_round_trip(pg_url: str) -> None:
     inspector = inspect(engine)
     assert "refresh_tokens" in inspector.get_table_names()
 
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "0001")
     inspector = inspect(engine)
     assert "refresh_tokens" not in inspector.get_table_names()
     assert "users" in inspector.get_table_names(), (
-        "downgrade -1 should drop only refresh_tokens, not the prior schema"
+        "downgrade to 0001 should drop refresh_tokens (and 0003 tables), not the prior schema"
     )
 
     command.upgrade(cfg, "head")

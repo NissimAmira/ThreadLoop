@@ -82,6 +82,38 @@ class FacebookSsoCallbackInput(WireBase):
     )
 
 
+class LinkRequestInput(WireBase):
+    """Body for `POST /api/auth/link`.
+
+    Resolves a pending account-link by re-authenticating with the original
+    provider. The credential field is a provider-specific shape — the same
+    shape the matching `POST /api/auth/{provider}/callback` accepts. The
+    route validates the credential via the same verifier and asserts the
+    resulting identity matches the existing user's primary identity before
+    merging.
+
+    `linkToken` is single-use server-side: the route records each consumed
+    `jti` in `consumed_link_tokens` and rejects replays with 401.
+    """
+
+    link_token: str = Field(..., min_length=1, description="Pending-link JWT.")
+    original_provider: AuthProvider = Field(
+        ...,
+        description="Provider the user is re-authenticating with — must equal "
+        "the existing user's primary provider.",
+    )
+    # `credential` carries one of the three callback-input shapes. We accept
+    # a permissive `dict[str, Any]` here and validate against the
+    # provider-specific schema in the route layer (matching the dispatcher's
+    # pattern in `sso_callback`). Validating here would force a oneOf-style
+    # discriminator that Pydantic v2 supports via tagged unions but which
+    # adds noise without value — the route already knows which provider
+    # we're talking about from `original_provider`.
+    credential: dict[str, object] = Field(
+        ..., description="Provider-specific credential matching `original_provider`."
+    )
+
+
 class UserOut(WireBase):
     """OpenAPI `User`. Field names match the spec verbatim."""
 
