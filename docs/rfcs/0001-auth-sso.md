@@ -87,8 +87,12 @@ project owner enrolls in the Apple Developer Program**.
   would require `APPLE_CLIENT_ID` / `APPLE_TEAM_ID` / `APPLE_KEY_ID`
   / `APPLE_PRIVATE_KEY` are inert. See `docs/auth.md` § "Per-provider
   gating" for the full behaviour matrix.
-- Frontend: when `VITE_APPLE_CLIENT_ID` is unset, the Apple button on
-  `/sign-in` renders in its disabled-fallback state.
+- Frontend: `VITE_APPLE_ENABLED` defaults to `false`, which hides the
+  Apple button on `/sign-in` everywhere (DEV and prod) regardless of
+  whether `VITE_APPLE_CLIENT_ID` is set. The FE flag is the explicit
+  per-provider gate and mirrors the BE's `APPLE_ENABLED`; see
+  `docs/auth.md` § "Per-provider gating" for the full behaviour
+  matrix.
 
 **Why deferred:** enabling Apple in production requires:
 
@@ -116,9 +120,15 @@ A web-only deployment without an iOS app does not trigger 4.8.
    `aud` check).
 4. Flip `APPLE_ENABLED=true` (BE) — `Settings` validates the secrets
    are present at boot.
-5. The button on `/sign-in` lights up automatically once
-   `VITE_APPLE_CLIENT_ID` is set in the build.
-6. Run the existing Cypress smoke (`sign-in-apple.cy.ts`) against
+5. Flip `VITE_APPLE_ENABLED=true` (FE) — this is the explicit
+   per-provider gate; `VITE_APPLE_CLIENT_ID` from step 3 alone is
+   not enough. The flag mirrors the BE's `APPLE_ENABLED` and is
+   independently required (PR #59 introduced this; see `docs/auth.md`
+   § "Per-provider gating"). Both BE and FE flags must be flipped in
+   the same deploy.
+6. The button on `/sign-in` lights up at the next build, since both
+   `VITE_APPLE_ENABLED=true` and `VITE_APPLE_CLIENT_ID` are now set.
+7. Run the existing Cypress smoke (`sign-in-apple.cy.ts`) against
    real credentials, then validate in staging before flipping in
    production. Same staging-before-prod cadence as the master
    `AUTH_ENABLED` flag.

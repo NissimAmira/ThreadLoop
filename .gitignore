@@ -17,6 +17,9 @@ build/
 .expo-shared/
 web-build/
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.py[cod]
