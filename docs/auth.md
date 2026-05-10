@@ -715,12 +715,13 @@ def open_transaction(user: User = Depends(require_buyer)):  # checks can_purchas
 A user can hold both roles simultaneously and switch contexts without
 re-authenticating.
 
-## Web client (slices 1, 2 & 3 — Google + Apple + Facebook)
+## Web client (slices 1, 2, 3 & 4 — Google + Apple + Facebook + linking)
 
 The web sign-in surface ships in vertical slices (#19, #38, #39, #40). Slice
 1 lands the Google end-to-end demo plus the shared scaffolding all later
 slices reuse; slice 2 (#38) adds the Apple button next to it; slice 3 (#39)
-adds the Facebook button.
+adds the Facebook button; slice 4 (#40) wires the cross-provider
+account-linking modal on top.
 
 ### Auth context
 
@@ -874,20 +875,105 @@ Facebook email as unverified — see § Facebook specifics for the full
 analysis. The handling is kept verbatim so a future Graph response shape
 change plugs in cleanly.
 
+### Link UI (slice 4 / #40)
+
+`frontend-web/src/components/LinkAccountsDialog.tsx` replaces the slice-1/2/3
+generic _"This email is registered with another provider"_ error with a
+real account-linking flow. When any of the three callbacks
+(`/api/auth/{google,apple,facebook}/callback`) returns
+`linkRequired: true`, `SignInPage` no longer surfaces a page-level error —
+it stashes the `{ linkToken, linkProvider }` in component state and mounts
+the modal.
+
+**Page-state shape.** The modal lives as a state overlay on `/sign-in`,
+not a separate `/link` route. The `linkToken` lives in `SignInPage`
+component state for the duration of the flow and is _never_ persisted to
+localStorage / sessionStorage / cookies — a page reload provably wipes
+it (matches the AC's in-memory-only constraint and means a refresh is the
+"start over" recovery path even when the BE-side TTL hasn't expired).
+
+**Failure-envelope mapping** (matches PR #64's "Failure mapping" verbatim):
+
+- **401** — link token expired / consumed / mismatched original provider
+  / credential failed verification. The BE deliberately collapses these
+  into one envelope so a probe can't distinguish them; the FE matches
+  with one recovery copy ("Your linking session expired. Please sign in
+  again to start over.") and a single _Back to sign-in_ CTA.
+- **409** — second-provider identity already claimed by a different
+  ThreadLoop account. Distinct copy ("This account is already linked to
+  a different ThreadLoop account.") with no retry — retrying won't help.
+- **503** — original provider's JWKS / Graph API unreachable. Retryable
+  ("Couldn't reach the sign-in service just now. Please try again in a
+  moment.").
+
+**Client-side TTL.** A 10-minute timer matching the BE's default
+`link_token_ttl_seconds=600` proactively transitions the modal to the
+expired-recovery state if the user lingers. The BE has already
+invalidated the token at that point, so any subsequent click would 401
+anyway; the timer is a UX courtesy that swaps "click and get a confusing
+error" for "see the recovery copy directly."
+
+**Highlighted-button treatment.** The original-provider button is wrapped
+in a `ring-2 ring-brand ring-offset-2` div with an "Original account"
+badge above. The provider's _own_ button styling is preserved unchanged
+(Google's GIS-rendered button isn't recolored — Google brand guidelines
+forbid that; Apple/Facebook buttons keep their existing brand styles).
+The modal renders the highlighted button regardless of whether that
+provider's `VITE_*_ENABLED` flag is on, because at this point we're
+confirming an _existing_ identity, not offering the provider for
+sign-in — the flag's "this provider is offered" semantic doesn't apply.
+
+**Accessibility.** Implemented per the WAI-ARIA APG dialog pattern:
+`role="dialog" + aria-modal="true"`, `aria-labelledby` referencing the
+heading id, `aria-describedby` referencing the explainer copy, initial
+focus on the highlighted original-provider button (primary action wins
+focus per APG), focus trap (Tab/Shift+Tab cycle inside the modal only),
+Esc closes + restores focus to the originally-clicked second-provider
+button. Status announcements live in a separate `aria-live="polite"`
+region inside the modal, distinct from the page-level
+`aria-live="assertive"` error region — the polite region won't interrupt
+JAWS / NVDA mid-sentence during the SDK round-trip. The focus-trap
+implementation is a minimal local hook (`src/lib/focusTrap.ts`); we did
+not pull in `@radix-ui/react-dialog` or `@headlessui/react` for one
+consumer.
+
+**Wrong-provider re-auth.** While the modal is open the underlying
+second-provider buttons remain technically clickable (they sit behind
+the modal's overlay). A click on a non-original-provider button is
+treated as a user mistake (e.g. two browser tabs) — the modal stays up
+and surfaces an inline message ("Sign in with {originalProvider} to
+link your accounts.") rather than starting a fresh callback round-trip
+that would clobber the link state.
+
+**Test coverage.**
+
+- `frontend-web/src/components/LinkAccountsDialog.test.tsx` (Vitest):
+  the five a11y AC bullets, the 401/409/503 mapping, the 10-minute TTL
+  transition, the no-`linkToken`-in-storage assertion, and the per-
+  provider re-auth happy path (Apple-as-original + Facebook-as-original
+  in unit tests; Google-as-original in Cypress because GIS round-trip
+  asynchrony is awkward in jsdom).
+- `frontend-web/cypress/e2e/sign-in-link.cy.ts` (Cypress): full network-
+  seam stub of the Google→Apple→`POST /api/auth/link` flow, the 401
+  recovery branch, the Esc-restores-focus a11y bullet, and the wrong-
+  provider re-auth branch. The Apple stub fires here even though
+  `VITE_APPLE_ENABLED` defaults to `false` — the spec is configured to
+  set the flag for the test bench since modal logic doesn't depend on
+  the provider being live in production. BE-side coverage of the
+  Google↔Apple↔Facebook matrix lives on PR #64.
+
 ### Out of scope here
 
-The full `link_required` linking UI (#40) ships in its own slice. Slices
-1, 2 & 3's `link_required` handling is a generic error message ("This
-email is registered with another provider; please sign in with that
-provider instead") with no second-step re-auth — enough to validate the
-contract surface without prematurely building UI that #40 will rework.
+Mobile linking (#20, slice 5) ships in its own Epic surface. The
+account-unlinking flow and the "manage linked accounts" settings UI
+are deferred to future tasks — there's no UI for them yet because
+there's no consumer.
 
 ## What's not implemented yet
 
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
 
-- Full `link_required` linking UI flow on web (slice 4 / #40).
 - Mobile SDK integration (#20).
 - `require_buyer` / `require_seller` dependencies (#37 — defer to listings
   / transactions epics where the first consumers land)
@@ -984,6 +1070,37 @@ name? }` to `POST /api/auth/apple/callback`; on success follows the
   for relay addresses. Cleanup of expired `consumed_link_tokens` rows is
   a future concern; rows are tiny and accumulation is acceptable. See
   `docs/auth.md` § "Account linking" for the full resolved semantics.
+- **Slice-4 FE half** (#40): `LinkAccountsDialog` modal that replaces the
+  slice-1/2/3 generic _"registered with another provider"_ error with a
+  real cross-provider account-linking flow. When a callback returns
+  `linkRequired: true`, `SignInPage` mounts the modal with the original-
+  provider button highlighted (`ring-2 ring-brand ring-offset-2` wrapper
+  + "Original account" badge); the user re-authenticates with the
+  original provider, the modal posts `{linkToken, originalProvider,
+  credential}` to `POST /api/auth/link`, and on 200 the merged session
+  is promoted via `useAuth().signIn()` and the user redirected to `next`.
+  The modal lives as a state overlay on `/sign-in` (not a separate
+  route) so a reload provably wipes the in-memory `linkToken`. Failure
+  envelopes from PR #64 are mapped to distinct copy: 401 →
+  expired-or-mismatched single-recovery copy, 409 → identity-already-
+  claimed (no-retry), 503 → provider-unreachable (retryable). A 10-
+  minute client-side TTL matching the BE's default
+  `link_token_ttl_seconds=600` proactively transitions the modal to the
+  expired-recovery state. Accessibility per WAI-ARIA APG dialog pattern:
+  `role="dialog" + aria-modal="true"` with `aria-labelledby` /
+  `aria-describedby`, initial focus on the highlighted original-provider
+  button, focus trap (Tab/Shift+Tab), Esc closes + restores focus to
+  the originally-clicked second-provider button. SDK-flow status
+  announcements live in a separate in-modal `aria-live="polite"` region,
+  distinct from the page-level assertive error region. Wrong-provider
+  re-auth (user clicks the second-provider button while the modal is
+  open) surfaces an inline message rather than starting a fresh
+  callback round-trip. Cypress smoke at
+  `cypress/e2e/sign-in-link.cy.ts`; Vitest unit coverage at
+  `src/components/LinkAccountsDialog.test.tsx`. Apple is the second
+  provider in the smoke test bench despite `VITE_APPLE_ENABLED=false`
+  in default builds because the modal logic doesn't gate on the flag —
+  see § Web client / Link UI for the carve-out reasoning.
 - **camelCase wire shape** (#44): the contract drift between
   `shared/openapi.yaml` (snake) and `shared/src/types/` (camel) inherited
   from #12 was resolved by flipping the wire to camelCase via Pydantic

@@ -212,7 +212,7 @@ describe("SignInPage", () => {
     });
   });
 
-  it("renders the linkRequired generic error without redirecting", async () => {
+  it("opens the link-accounts modal on a Google linkRequired response (slice 4 / #40)", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (url.includes("/api/auth/refresh")) {
@@ -241,10 +241,15 @@ describe("SignInPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
-        /registered with another provider/i,
-      );
+      expect(screen.getByTestId("link-accounts-dialog")).toBeInTheDocument();
     });
+    // The modal is the new generic-error replacement; the page-level
+    // assertive error region stays empty for the link flow.
+    expect(screen.getByTestId("sign-in-error").textContent).toBe("");
+    // Original-provider name is announced in the body copy.
+    expect(screen.getByTestId("link-accounts-dialog").textContent).toMatch(
+      /already have a ThreadLoop account with .*Apple/i,
+    );
   });
 
   it("renders a retryable error on a 401 from the callback", async () => {
@@ -386,7 +391,7 @@ describe("SignInPage", () => {
     );
   });
 
-  it("Apple linkRequired surfaces the generic cross-provider error", async () => {
+  it("Apple linkRequired opens the link-accounts modal targeting the original provider (slice 4 / #40)", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (url.includes("/api/auth/refresh")) {
@@ -421,10 +426,13 @@ describe("SignInPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("sign-in-error").textContent).toMatch(
-        /registered with another provider/i,
-      );
+      expect(screen.getByTestId("link-accounts-dialog")).toBeInTheDocument();
     });
+    expect(screen.getByTestId("link-accounts-dialog").textContent).toMatch(
+      /already have a ThreadLoop account with .*Google/i,
+    );
+    // Page-level assertive error region stays empty for the link flow.
+    expect(screen.getByTestId("sign-in-error").textContent).toBe("");
   });
 
   it("Apple-relay-email accounts (privaterelay.appleid.com) sign in cleanly", async () => {
