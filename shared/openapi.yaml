@@ -96,6 +96,74 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/auth/link:
+    post:
+      tags: [auth]
+      summary: Resolve a pending account-link by re-authenticating with the original provider
+      description: |
+        Consumes a `linkToken` issued by `POST /api/auth/{provider}/callback`
+        when a verified-email collision was detected across providers. The
+        client must re-authenticate the user with the original provider
+        (the one identified by `linkProvider` on the pending-link envelope),
+        then submit that fresh credential here as `credential`.
+
+        On success the second-provider identity is added to the existing
+        user's `user_identities` rows, a fresh session is minted for that
+        user (refresh cookie set, access JWT in body), and the response is
+        the standard `Session` envelope (with `linkRequired: false`). The
+        existing user's primary `(provider, provider_user_id)` on `users`
+        is unchanged — `User.provider` continues to point at the original
+        provider after the merge.
+
+        The `linkToken` is single-use: each consumed `jti` is recorded
+        server-side and replays return `401`. Tokens older than
+        `linkTokenTtlSeconds` (default 10 minutes) also return `401`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkRequestInput" }
+      responses:
+        "200":
+          description: |
+            Link merge succeeded. Refresh cookie is set; `Session.linkRequired`
+            is `false` and `accessToken` / `expiresAt` / `user` are populated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          description: |
+            Failure modes (single envelope, no detail leaked):
+              - `linkToken` missing, malformed, signature-invalid, expired,
+                or already consumed (replay)
+              - `originalProvider` doesn't match the existing user's primary
+                provider
+              - `credential` failed verification with the original provider
+              - the verified `credential` doesn't resolve to the existing
+                user's primary `(provider, providerUserId)` identity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Auth subsystem disabled (`AUTH_ENABLED=false`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: |
+            The second-provider identity is already claimed by a different
+            user. The link cannot be performed; the client should surface
+            the conflict and prompt the user to contact support if they
+            believe both accounts are theirs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Original provider's JWKS / Graph API unreachable; client should retry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/auth/refresh:
     post:
       tags: [auth]
@@ -196,7 +264,12 @@ paths:
     get:
       tags: [listings]
       parameters:
-        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - {
+            in: path,
+            name: id,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
       responses:
         "200":
           description: Listing detail
@@ -214,7 +287,11 @@ paths:
         - { in: query, name: brand, schema: { type: string } }
         - { in: query, name: category, schema: { type: string } }
         - { in: query, name: size, schema: { type: string } }
-        - { in: query, name: condition, schema: { type: string, enum: [new, like_new, good, fair] } }
+        - {
+            in: query,
+            name: condition,
+            schema: { type: string, enum: [new, like_new, good, fair] },
+          }
         - { in: query, name: minPriceCents, schema: { type: integer } }
         - { in: query, name: maxPriceCents, schema: { type: integer } }
         - { in: query, name: page, schema: { type: integer, default: 1 } }
@@ -262,18 +339,23 @@ components:
       type: object
       required: [status, version, db, redis, meili]
       properties:
-        status:  { $ref: "#/components/schemas/DependencyStatus" }
+        status: { $ref: "#/components/schemas/DependencyStatus" }
         version: { type: string }
-        db:      { $ref: "#/components/schemas/DependencyStatus" }
-        redis:   { $ref: "#/components/schemas/DependencyStatus" }
-        meili:   { $ref: "#/components/schemas/DependencyStatus" }
+        db: { $ref: "#/components/schemas/DependencyStatus" }
+        redis: { $ref: "#/components/schemas/DependencyStatus" }
+        meili: { $ref: "#/components/schemas/DependencyStatus" }
 
     Error:
       type: object
       required: [code, message]
       properties:
-        code:    { type: string, description: "Stable machine-readable error code." }
-        message: { type: string, description: "Human-readable detail; safe to surface." }
+        code:
+          { type: string, description: "Stable machine-readable error code." }
+        message:
+          {
+            type: string,
+            description: "Human-readable detail; safe to surface.",
+          }
         requestId:
           type: string
           description: "Server-assigned request id for log correlation."
@@ -293,7 +375,11 @@ components:
       required: [idToken, code]
       properties:
         idToken: { type: string, description: "Apple-issued ID token (JWT)." }
-        code:    { type: string, description: "Apple authorization code; used to redeem an Apple refresh token server-side." }
+        code:
+          {
+            type: string,
+            description: "Apple authorization code; used to redeem an Apple refresh token server-side.",
+          }
         name:
           type: string
           nullable: true
@@ -307,7 +393,11 @@ components:
       type: object
       required: [accessToken]
       properties:
-        accessToken: { type: string, description: "Facebook user access token (resolved against Graph API server-side)." }
+        accessToken:
+          {
+            type: string,
+            description: "Facebook user access token (resolved against Graph API server-side).",
+          }
 
     SsoCallbackInput:
       description: |
@@ -318,21 +408,66 @@ components:
         - $ref: "#/components/schemas/AppleSsoCallbackInput"
         - $ref: "#/components/schemas/FacebookSsoCallbackInput"
 
+    LinkRequestInput:
+      type: object
+      description: |
+        Body for `POST /api/auth/link`. Resolves a pending account-link by
+        re-authenticating with the original provider.
+
+        - `linkToken` is the value returned in the `linkToken` field of the
+          original callback's `link_required` envelope. Single-use — each
+          consumed `jti` is recorded server-side; replays return `401`.
+        - `originalProvider` MUST equal the `linkProvider` value the
+          callback returned (i.e., the provider the existing user is
+          already signed in with). Mismatch returns `401`.
+        - `credential` is the same provider-specific shape the original
+          callback accepts (one of `GoogleSsoCallbackInput`,
+          `AppleSsoCallbackInput`, `FacebookSsoCallbackInput`). The backend
+          re-uses the same verifier for `originalProvider` to validate it.
+      required: [linkToken, originalProvider, credential]
+      properties:
+        linkToken:
+          type: string
+          description: "The signed JWT issued by the callback that detected the collision."
+        originalProvider:
+          $ref: "#/components/schemas/AuthProvider"
+        credential:
+          oneOf:
+            - $ref: "#/components/schemas/GoogleSsoCallbackInput"
+            - $ref: "#/components/schemas/AppleSsoCallbackInput"
+            - $ref: "#/components/schemas/FacebookSsoCallbackInput"
+          description: "Provider-specific credential matching `originalProvider`."
+
     User:
       type: object
-      required: [id, provider, displayName, emailVerified, canSell, canPurchase, createdAt, updatedAt]
+      required:
+        [
+          id,
+          provider,
+          displayName,
+          emailVerified,
+          canSell,
+          canPurchase,
+          createdAt,
+          updatedAt,
+        ]
       properties:
-        id:            { type: string, format: uuid }
-        provider:      { $ref: "#/components/schemas/AuthProvider" }
-        email:         { type: string, nullable: true, description: "May be null when Apple withholds the address." }
+        id: { type: string, format: uuid }
+        provider: { $ref: "#/components/schemas/AuthProvider" }
+        email:
+          {
+            type: string,
+            nullable: true,
+            description: "May be null when Apple withholds the address.",
+          }
         emailVerified: { type: boolean }
-        displayName:   { type: string }
-        avatarUrl:     { type: string, nullable: true, format: uri }
-        canSell:       { type: boolean }
-        canPurchase:   { type: boolean }
-        sellerRating:  { type: number, nullable: true, minimum: 0, maximum: 5 }
-        createdAt:     { type: string, format: date-time }
-        updatedAt:     { type: string, format: date-time }
+        displayName: { type: string }
+        avatarUrl: { type: string, nullable: true, format: uri }
+        canSell: { type: boolean }
+        canPurchase: { type: boolean }
+        sellerRating: { type: number, nullable: true, minimum: 0, maximum: 5 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
 
     Session:
       type: object
@@ -371,59 +506,70 @@ components:
       type: object
       required: [id, position, url]
       properties:
-        id:       { type: string, format: uuid }
+        id: { type: string, format: uuid }
         position: { type: integer }
-        url:      { type: string, format: uri }
-        width:    { type: integer, nullable: true }
-        height:   { type: integer, nullable: true }
+        url: { type: string, format: uri }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
 
     ListingArAsset:
       type: object
       required: [glbLowUrl, glbHighUrl]
       properties:
-        glbLowUrl:   { type: string, format: uri }
-        glbHighUrl:  { type: string, format: uri }
+        glbLowUrl: { type: string, format: uri }
+        glbHighUrl: { type: string, format: uri }
         processedAt: { type: string, format: date-time, nullable: true }
 
     Listing:
       type: object
       required:
-        [id, sellerId, title, category, condition, priceCents, currency, status, images]
+        [
+          id,
+          sellerId,
+          title,
+          category,
+          condition,
+          priceCents,
+          currency,
+          status,
+          images,
+        ]
       properties:
-        id:          { type: string, format: uuid }
-        sellerId:    { type: string, format: uuid }
-        title:       { type: string }
+        id: { type: string, format: uuid }
+        sellerId: { type: string, format: uuid }
+        title: { type: string }
         description: { type: string, nullable: true }
-        brand:       { type: string, nullable: true }
-        category:    { type: string }
-        size:        { type: string, nullable: true }
-        condition:   { type: string, enum: [new, like_new, good, fair] }
-        priceCents:  { type: integer, minimum: 1 }
-        currency:    { type: string, minLength: 3, maxLength: 3 }
-        status:      { type: string, enum: [draft, active, sold, removed] }
-        images:      { type: array, items: { $ref: "#/components/schemas/ListingImage" } }
-        arAsset:     { $ref: "#/components/schemas/ListingArAsset", nullable: true }
-        createdAt:   { type: string, format: date-time }
-        updatedAt:   { type: string, format: date-time }
+        brand: { type: string, nullable: true }
+        category: { type: string }
+        size: { type: string, nullable: true }
+        condition: { type: string, enum: [new, like_new, good, fair] }
+        priceCents: { type: integer, minimum: 1 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        status: { type: string, enum: [draft, active, sold, removed] }
+        images:
+          { type: array, items: { $ref: "#/components/schemas/ListingImage" } }
+        arAsset: { $ref: "#/components/schemas/ListingArAsset", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
 
     CreateListingInput:
       type: object
       required: [title, category, condition, priceCents]
       properties:
-        title:       { type: string, maxLength: 200 }
+        title: { type: string, maxLength: 200 }
         description: { type: string }
-        brand:       { type: string }
-        category:    { type: string }
-        size:        { type: string }
-        condition:   { type: string, enum: [new, like_new, good, fair] }
-        priceCents:  { type: integer, minimum: 1 }
-        currency:    { type: string, default: "USD" }
+        brand: { type: string }
+        category: { type: string }
+        size: { type: string }
+        condition: { type: string, enum: [new, like_new, good, fair] }
+        priceCents: { type: integer, minimum: 1 }
+        currency: { type: string, default: "USD" }
 
     ListingPage:
       type: object
       required: [items, nextCursor]
       properties:
-        items:      { type: array, items: { $ref: "#/components/schemas/Listing" } }
+        items: { type: array, items: { $ref: "#/components/schemas/Listing" } }
         nextCursor: { type: string, nullable: true }
 
     SearchResult:
@@ -441,27 +587,27 @@ components:
         facets:
           type: object
           properties:
-            brand:     { type: object, additionalProperties: { type: integer } }
-            category:  { type: object, additionalProperties: { type: integer } }
-            size:      { type: object, additionalProperties: { type: integer } }
+            brand: { type: object, additionalProperties: { type: integer } }
+            category: { type: object, additionalProperties: { type: integer } }
+            size: { type: object, additionalProperties: { type: integer } }
             condition: { type: object, additionalProperties: { type: integer } }
-        page:       { type: integer }
+        page: { type: integer }
         totalPages: { type: integer }
-        totalHits:  { type: integer }
+        totalHits: { type: integer }
 
     Transaction:
       type: object
       required:
         [id, listingId, buyerId, sellerId, amountCents, currency, status]
       properties:
-        id:          { type: string, format: uuid }
-        listingId:   { type: string, format: uuid }
-        buyerId:     { type: string, format: uuid }
-        sellerId:    { type: string, format: uuid }
+        id: { type: string, format: uuid }
+        listingId: { type: string, format: uuid }
+        buyerId: { type: string, format: uuid }
+        sellerId: { type: string, format: uuid }
         amountCents: { type: integer }
-        currency:    { type: string, minLength: 3, maxLength: 3 }
+        currency: { type: string, minLength: 3, maxLength: 3 }
         status:
           type: string
           enum: [pending, paid, shipped, delivered, disputed, refunded]
-        createdAt:   { type: string, format: date-time }
-        updatedAt:   { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

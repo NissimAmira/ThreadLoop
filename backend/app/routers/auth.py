@@ -25,6 +25,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request, Resp
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from app.auth.apple import (
@@ -43,12 +44,23 @@ from app.auth.google import (
     JwksUnavailableError,
     verify_google_id_token,
 )
-from app.auth.link import issue_link_token
+from app.auth.identity import (
+    find_user_by_identity,
+    link_identity_to_user,
+    register_primary_identity,
+)
+from app.auth.link import (
+    LinkTokenExpiredError,
+    LinkTokenInvalidError,
+    decode_link_token,
+    issue_link_token,
+)
 from app.auth.schemas import (
     AppleSsoCallbackInput,
     AuthProvider,
     FacebookSsoCallbackInput,
     GoogleSsoCallbackInput,
+    LinkRequestInput,
     Session,
     UserOut,
 )
@@ -61,7 +73,7 @@ from app.auth.session import (
 )
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import RefreshToken, User
+from app.models import ConsumedLinkToken, RefreshToken, User
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +201,7 @@ def _handle_google_callback(
             status.HTTP_401_UNAUTHORIZED,
         ) from None
 
-    existing = db.execute(
-        select(User).where(User.provider == "google", User.provider_user_id == identity.sub)
-    ).scalar_one_or_none()
+    existing = find_user_by_identity(db, provider="google", provider_user_id=identity.sub)
 
     if existing is None and identity.email and identity.email_verified:
         collision = db.execute(
@@ -226,6 +236,7 @@ def _handle_google_callback(
         )
         db.add(user)
         db.flush()
+        register_primary_identity(db, user=user, provider="google", provider_user_id=identity.sub)
     else:
         user = existing
 
@@ -467,6 +478,384 @@ def logout(
     return response
 
 
+_INVALID_LINK_MESSAGE = "Link request is invalid, expired, or has been consumed."
+
+
+def _verify_link_credential(
+    *,
+    provider: str,
+    credential: dict[str, object],
+    settings: Settings,
+) -> tuple[str, str | None]:
+    """Re-verify the original-provider credential submitted to
+    `POST /api/auth/link`. Returns `(provider_user_id, email_or_none)`.
+
+    The verifier results carry richer fields (display name, avatar) that
+    are interesting for the *first sign-in* of a fresh user but irrelevant
+    here — we're not creating a user, we're confirming the caller can
+    successfully re-authenticate as the existing one. So we narrow the
+    return to what the merge logic actually checks: `provider_user_id`
+    (must match the existing user's primary identity) and `email`
+    (informational; not used for matching).
+
+    Raises:
+        HTTPException 422: credential body fails Pydantic validation for
+            the named provider.
+        HTTPException 401: credential signature / `aud` / `iss` invalid,
+            or token-style failure.
+        HTTPException 503: provider JWKS / Graph API unreachable.
+    """
+    if provider == "google":
+        try:
+            body = GoogleSsoCallbackInput.model_validate(credential)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=exc.errors(),
+            ) from None
+        try:
+            identity = verify_google_id_token(
+                body.id_token, expected_audience=settings.google_client_id
+            )
+        except JwksUnavailableError:
+            logger.warning("Google JWKS unavailable during link merge; returning 503")
+            raise _http_error(
+                "jwks_unavailable",
+                "Google JWKS endpoint is unreachable; please retry.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from None
+        except InvalidGoogleTokenError as exc:
+            logger.info("Google ID token rejected during link merge: %s", exc)
+            raise _http_error(
+                "invalid_credential",
+                _INVALID_LINK_MESSAGE,
+                status.HTTP_401_UNAUTHORIZED,
+            ) from None
+        return identity.sub, identity.email
+
+    if provider == "apple":
+        try:
+            body_apple = AppleSsoCallbackInput.model_validate(credential)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=exc.errors(),
+            ) from None
+        try:
+            identity_apple = verify_apple_id_token(
+                body_apple.id_token, expected_audience=settings.apple_client_id
+            )
+        except AppleJwksUnavailableError:
+            logger.warning("Apple JWKS unavailable during link merge; returning 503")
+            raise _http_error(
+                "jwks_unavailable",
+                "Apple JWKS endpoint is unreachable; please retry.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from None
+        except InvalidAppleTokenError as exc:
+            logger.info("Apple ID token rejected during link merge: %s", exc)
+            raise _http_error(
+                "invalid_credential",
+                _INVALID_LINK_MESSAGE,
+                status.HTTP_401_UNAUTHORIZED,
+            ) from None
+        return identity_apple.sub, identity_apple.email
+
+    if provider == "facebook":
+        try:
+            body_fb = FacebookSsoCallbackInput.model_validate(credential)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=exc.errors(),
+            ) from None
+        try:
+            identity_fb = verify_facebook_access_token(
+                body_fb.access_token,
+                app_id=settings.facebook_app_id,
+                app_secret=settings.facebook_app_secret,
+            )
+        except GraphApiUnavailableError:
+            logger.warning("Facebook Graph API unavailable during link merge; returning 503")
+            raise _http_error(
+                "graph_api_unavailable",
+                "Facebook Graph API is unreachable; please retry.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from None
+        except InvalidFacebookTokenError as exc:
+            logger.info("Facebook access token rejected during link merge: %s", exc)
+            raise _http_error(
+                "invalid_credential",
+                _INVALID_LINK_MESSAGE,
+                status.HTTP_401_UNAUTHORIZED,
+            ) from None
+        return identity_fb.sub, identity_fb.email
+
+    # Unreachable while AuthProvider is `Literal["google","apple","facebook"]`,
+    # but defended in depth in case a fourth provider gets wired in without
+    # extending this dispatch. Single 401 envelope so a probe can't tell
+    # "unknown provider" apart from "invalid credential".
+    raise _http_error(
+        "invalid_credential",
+        _INVALID_LINK_MESSAGE,
+        status.HTTP_401_UNAUTHORIZED,
+    )
+
+
+@router.post(
+    "/link",
+    response_model=Session,
+    response_model_exclude_none=True,
+    summary="Resolve a pending account-link by re-authenticating with the original provider",
+    responses={
+        200: {"model": Session},
+        401: {"description": "Link token / credential invalid, expired, or already consumed."},
+        409: {"description": "Second-provider identity already claimed by a different user."},
+        503: {
+            "description": "Original provider's JWKS / Graph API unreachable; client should retry."
+        },
+    },
+)
+def link_account(
+    response: Response,
+    body: LinkRequestInput,
+    db: DbSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Session:
+    """Consume a `link_token` issued by a callback's `link_required`
+    response and merge the second-provider identity onto the existing
+    user's `user_identities` rows.
+
+    Failure mapping (single 401 envelope on every link-token failure so a
+    probe can't distinguish "no such jti" from "wrong original provider"
+    from "credential failed verification"):
+
+      - link token signature / typ / structural failure → 401
+      - link token expired (5-10 min TTL) → 401
+      - link token `jti` already consumed (replay) → 401
+      - `original_provider` doesn't equal the existing user's primary
+        provider → 401
+      - existing user (by `link_token.sub`) no longer exists → 401
+      - credential fails the original provider's verifier → 401
+      - credential resolves to a different `(provider, sub)` than the
+        existing user's primary identity → 401
+
+    409 is reserved for the genuine merge conflict: the second-provider
+    identity (from the link token) is already claimed by a *different*
+    user. That's not an attack signal — it can happen if both accounts
+    were created independently and a third party then tried to link.
+    The client should surface the conflict and route to support.
+
+    503 surfaces from the original provider's verifier (JWKS or Graph API
+    unreachable) — see `_verify_link_credential`.
+
+    Side effects on success:
+      - new `user_identities` row for `(linkToken.new_provider,
+        linkToken.new_provider_user_id, user_id=existing user)`
+      - `consumed_link_tokens` row for `linkToken.jti`
+      - revoke all of the existing user's outstanding refresh tokens
+        (defense-in-depth: linking is a high-trust state change, treat
+        it like a password change would be in a password world)
+      - fresh access JWT + refresh token via `issue_session`
+
+    `users.provider` / `users.provider_user_id` are NOT modified — the
+    primary identity is preserved across linking, matching the "primary"
+    semantic documented in `docs/auth.md` § Account linking.
+    """
+    # 1. Decode + validate the link token. JoseError, expiry, structural
+    #    failures all collapse to a single 401 envelope.
+    try:
+        claims = decode_link_token(body.link_token, settings=settings)
+    except LinkTokenExpiredError:
+        logger.info("Link rejected: %s", "link_token_expired")
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        ) from None
+    except LinkTokenInvalidError as exc:
+        logger.info("Link rejected: %s (%s)", "link_token_invalid", exc)
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        ) from None
+    except Exception as exc:  # noqa: BLE001 — authlib JoseError + subtypes
+        logger.info("Link rejected: %s (%s)", "link_token_signature_or_parse", exc)
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        ) from None
+
+    # 2. Single-use enforcement. Look up the jti in `consumed_link_tokens`
+    #    BEFORE doing any provider work — replays should fail fast and
+    #    cheap.
+    already_consumed = db.get(ConsumedLinkToken, claims.jti)
+    if already_consumed is not None:
+        logger.warning(
+            "Link rejected: %s jti=%s consumed_at=%s",
+            "link_token_replay",
+            claims.jti,
+            already_consumed.consumed_at.isoformat(),
+        )
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # 3. Existing user must still exist (account could have been deleted
+    #    between issuance and consumption). Same envelope to avoid
+    #    leaking "this user used to exist."
+    existing_user = db.get(User, claims.existing_user_id)
+    if existing_user is None:
+        logger.info(
+            "Link rejected: %s user_id=%s", "existing_user_not_found", claims.existing_user_id
+        )
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # 4. `original_provider` must match the existing user's primary
+    #    provider. The link token doesn't carry the original provider —
+    #    only the user id and the *new* provider. We trust `users.provider`
+    #    as the authoritative primary; the body field exists so the client
+    #    can declare which provider it's submitting a credential for and
+    #    so we don't have to dispatch by guessing the credential shape.
+    if body.original_provider != existing_user.provider:
+        logger.info(
+            "Link rejected: %s claimed=%s actual=%s",
+            "original_provider_mismatch",
+            body.original_provider,
+            existing_user.provider,
+        )
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # 5. Re-verify the original-provider credential. 401 / 503 surface
+    #    from `_verify_link_credential` (route layer translates verifier
+    #    exceptions into the canonical envelopes).
+    verified_sub, _verified_email = _verify_link_credential(
+        provider=body.original_provider,
+        credential=body.credential,
+        settings=settings,
+    )
+
+    # 6. The verified credential MUST resolve to the existing user's
+    #    primary `(provider, provider_user_id)`. Anything else means the
+    #    caller knows the link token but signed in as someone other than
+    #    the link-token's target user — exactly the attack the link flow
+    #    exists to prevent.
+    if verified_sub != existing_user.provider_user_id:
+        logger.warning(
+            "Link rejected: %s expected_sub=%s verified_sub=%s",
+            "credential_user_mismatch",
+            existing_user.provider_user_id,
+            verified_sub,
+        )
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # 7. The second-provider identity must not already be claimed by a
+    #    different user. If a `user_identities` row already exists for
+    #    `(claims.new_provider, claims.new_provider_user_id)` belonging to
+    #    a different user_id, we cannot link — surfacing 409 distinguishes
+    #    this genuine conflict from the 401 attack-signal cases above.
+    pre_existing = find_user_by_identity(
+        db,
+        provider=claims.new_provider,
+        provider_user_id=claims.new_provider_user_id,
+    )
+    if pre_existing is not None and pre_existing.id != existing_user.id:
+        logger.warning(
+            "Link conflict: %s existing_user=%s claimed_by=%s",
+            "second_provider_identity_taken",
+            existing_user.id,
+            pre_existing.id,
+        )
+        raise _http_error(
+            "identity_already_linked",
+            "The second-provider identity is already linked to another account.",
+            status.HTTP_409_CONFLICT,
+        )
+
+    # 8. All checks passed. Perform the merge under a single unit of work:
+    #    record the consumed jti, link the second identity, revoke any
+    #    outstanding refresh tokens for the existing user, mint a fresh
+    #    session, commit. (If we already linked this exact identity before
+    #    via a different jti — `pre_existing.id == existing_user.id` —
+    #    skip the link-row insert to keep the route idempotent on
+    #    repeated linking attempts.)
+    consumed_row = ConsumedLinkToken(
+        jti=claims.jti,
+        expires_at=claims.expires_at,
+    )
+    db.add(consumed_row)
+
+    if pre_existing is None:
+        link_identity_to_user(
+            db,
+            user=existing_user,
+            provider=claims.new_provider,
+            provider_user_id=claims.new_provider_user_id,
+        )
+
+    # Revoke outstanding refresh tokens so any prior session for the
+    # pre-link account is forced to re-auth. Linking is a high-trust
+    # state change; treat it the way a password rotation would be treated
+    # in a password world.
+    now = datetime.now(UTC)
+    db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == existing_user.id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+
+    issued = issue_session(existing_user, db=db, response=response, settings=settings, now=now)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent commit beat us to the consumed-jti row, OR the
+        # (provider, provider_user_id) unique constraint on
+        # `user_identities` rejected the link insert because a parallel
+        # link landed first. Either way the second-arriving request must
+        # behave like a replay rejection (the work has already been done
+        # by the other request, but we don't have its session to return).
+        # No DB state to clean up — the failed transaction was rolled back
+        # by SQLAlchemy.
+        db.rollback()
+        logger.warning(
+            "Link rejected: %s jti=%s",
+            "concurrent_commit_lost_race",
+            claims.jti,
+        )
+        raise _http_error(
+            "invalid_link_token",
+            _INVALID_LINK_MESSAGE,
+            status.HTTP_401_UNAUTHORIZED,
+        ) from None
+    db.refresh(existing_user)
+
+    return Session(
+        link_required=False,
+        access_token=issued.access_token,
+        expires_at=issued.access_token_expires_at,
+        user=UserOut.model_validate(existing_user),
+    )
+
+
 def _handle_facebook_callback(
     *,
     body: FacebookSsoCallbackInput,
@@ -514,9 +903,7 @@ def _handle_facebook_callback(
             status.HTTP_401_UNAUTHORIZED,
         ) from None
 
-    existing = db.execute(
-        select(User).where(User.provider == "facebook", User.provider_user_id == identity.sub)
-    ).scalar_one_or_none()
+    existing = find_user_by_identity(db, provider="facebook", provider_user_id=identity.sub)
 
     # Cross-provider collision check. Structurally identical to the Google
     # branch, but `identity.email_verified` is hard-coded False by the
@@ -558,6 +945,7 @@ def _handle_facebook_callback(
         )
         db.add(user)
         db.flush()
+        register_primary_identity(db, user=user, provider="facebook", provider_user_id=identity.sub)
     else:
         user = existing
 
@@ -631,9 +1019,7 @@ def _handle_apple_callback(
             status.HTTP_401_UNAUTHORIZED,
         ) from None
 
-    existing = db.execute(
-        select(User).where(User.provider == "apple", User.provider_user_id == identity.sub)
-    ).scalar_one_or_none()
+    existing = find_user_by_identity(db, provider="apple", provider_user_id=identity.sub)
 
     # Cross-provider collision detection. Same shape as Google with two
     # Apple-specific guards:
@@ -682,6 +1068,7 @@ def _handle_apple_callback(
         )
         db.add(user)
         db.flush()
+        register_primary_identity(db, user=user, provider="apple", provider_user_id=identity.sub)
     else:
         user = existing
 

@@ -44,10 +44,10 @@ designed to (issue #51).
 Behaviour matrix:
 
 | `AUTH_ENABLED` | `<PROVIDER>_ENABLED` | `POST /api/auth/<provider>/callback` |
-| --- | --- | --- |
-| `false` | (any) | 404 (master gate) |
-| `true` | `false` | 404 (per-provider gate) |
-| `true` | `true` | runs |
+| -------------- | -------------------- | ------------------------------------ |
+| `false`        | (any)                | 404 (master gate)                    |
+| `true`         | `false`              | 404 (per-provider gate)              |
+| `true`         | `true`               | runs                                 |
 
 Both 404s carry the bare FastAPI `{"detail": "Not Found"}` envelope, so a
 probe can't distinguish the master flag-off state from a per-provider
@@ -108,12 +108,12 @@ else, including unset, is `false`).
 
 Per-provider behaviour matrix (FE side, mirrors the BE table above):
 
-| `VITE_*_ENABLED` | `VITE_*_CLIENT_ID` | Mode | Result |
-| --- | --- | --- | --- |
-| `false` (or unset) | (any) | (any) | Button hidden everywhere — flag wins |
-| `true` | set | (any) | Button renders functional |
-| `true` | unset | DEV | Button renders, dev-targeted "not configured" error — preserves loud-misconfiguration semantics for active providers |
-| `true` | unset | prod | Button hidden — safe-prod fallback |
+| `VITE_*_ENABLED`   | `VITE_*_CLIENT_ID` | Mode  | Result                                                                                                               |
+| ------------------ | ------------------ | ----- | -------------------------------------------------------------------------------------------------------------------- |
+| `false` (or unset) | (any)              | (any) | Button hidden everywhere — flag wins                                                                                 |
+| `true`             | set                | (any) | Button renders functional                                                                                            |
+| `true`             | unset              | DEV   | Button renders, dev-targeted "not configured" error — preserves loud-misconfiguration semantics for active providers |
+| `true`             | unset              | prod  | Button hidden — safe-prod fallback                                                                                   |
 
 **Side-effect contract:** when `VITE_*_ENABLED=false`, that provider's
 SDK script is never fetched and its global is never touched — the flag
@@ -131,7 +131,7 @@ Apple/Facebook secrets and client IDs can be left empty.
 
 If **every** FE flag is `false` in a build (e.g. a misconfigured deploy
 where no provider made it through), the page substitutes an empty-state
-message — *"Sign-in is currently unavailable. Please try again later."*
+message — _"Sign-in is currently unavailable. Please try again later."_
 — for the button slots so users don't read the page as broken. The
 empty state also fires when every flag is `true` but no client IDs are
 set in a prod build (each provider falls into the safe-prod hide path).
@@ -169,13 +169,15 @@ would silently make every sign-in look like "your token is invalid" (401)
 when the real fault is server config. Per-provider gating preserves the
 loud-fail property for whichever providers ARE enabled, and lets a
 slice-1 demo boot with only `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true`
-+ the cross-cutting secrets + `GOOGLE_CLIENT_ID` set.
+
+- the cross-cutting secrets + `GOOGLE_CLIENT_ID` set.
 
 Settings is loaded at boot — there is no runtime hot-toggle. Flipping a
 provider on or off requires a process restart, matching the master flag's
 semantics.
 
 Rollout sequence (RFC 0001):
+
 1. Implementation lands flag-off.
 2. Web sign-in page lands flag-off.
 3. Flag flipped on in **staging** (Phase 2 of the DevOps roadmap).
@@ -188,11 +190,11 @@ flips in production.
 
 ## Supported providers
 
-| Provider | SDK (web) | SDK (mobile) | Notes |
-| --- | --- | --- | --- |
-| Google | Google Identity Services | `expo-auth-session` | Standard OIDC. |
-| Apple | Sign in with Apple JS | `expo-apple-authentication` (iOS native) | `client_secret` is a JWT signed with the team key (rotates ~6mo). |
-| Facebook | Facebook Login SDK | `expo-auth-session` | Returns access token, not ID token — we exchange for the user profile via Graph API. |
+| Provider | SDK (web)                | SDK (mobile)                             | Notes                                                                                |
+| -------- | ------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------ |
+| Google   | Google Identity Services | `expo-auth-session`                      | Standard OIDC.                                                                       |
+| Apple    | Sign in with Apple JS    | `expo-apple-authentication` (iOS native) | `client_secret` is a JWT signed with the team key (rotates ~6mo).                    |
+| Facebook | Facebook Login SDK       | `expo-auth-session`                      | Returns access token, not ID token — we exchange for the user profile via Graph API. |
 
 ## Flow
 
@@ -248,6 +250,30 @@ refresh_tokens (
     revoked_at   timestamptz                          -- null = active; non-null = revoked
 );
 CREATE INDEX ix_refresh_tokens_user_id ON refresh_tokens(user_id);
+
+-- Slice 4 (#18): all `(provider, provider_user_id)` tuples a user can
+-- sign in with. The primary identity (mirroring users.(provider,
+-- provider_user_id)) is backfilled by migration 0003; linked secondary
+-- identities are inserted by the POST /api/auth/link route.
+user_identities (
+    id                  uuid primary key,
+    user_id             uuid not null references users(id) on delete cascade,
+    provider            text not null,
+    provider_user_id    text not null,
+    linked_at           timestamptz not null default now(),
+    UNIQUE (provider, provider_user_id)
+);
+CREATE INDEX ix_user_identities_user_id ON user_identities(user_id);
+
+-- Slice 4 (#18): single-use enforcement for link_token. Each consumed
+-- jti is recorded here; replays return 401. No FK to users — the jti is
+-- opaque to user identity and we don't want the table size bound to
+-- user-deletion patterns.
+consumed_link_tokens (
+    jti          varchar(64) primary key,
+    consumed_at  timestamptz not null default now(),
+    expires_at   timestamptz not null                  -- copied from link_token.exp; future sweeper drops by this
+);
 ```
 
 ### Refresh-token semantics
@@ -354,11 +380,48 @@ silently merging. The reasons:
 - Silent merging on email is a documented account-takeover vector.
 
 The link flow:
+
 1. User signs in with B; we detect the existing A account on email match.
-2. We hold session B in a short-lived "pending link" state.
-3. User must confirm in the UI by re-authenticating with provider A.
-4. Only then do we update the existing user row to support both providers
-   (via a separate `user_identities` table — added in the auth PR).
+2. We hold session B in a short-lived "pending link" state — no `users` /
+   `refresh_tokens` row written, no cookie set; client gets a signed JWT
+   `link_token` to carry through the next step.
+3. User must confirm in the UI by re-authenticating with provider A
+   (the original provider's button is highlighted on the link screen).
+4. Client posts `{linkToken, originalProvider, credential}` to
+   `POST /api/auth/link`. Backend validates the link_token, re-verifies
+   the credential via A's verifier, asserts the resulting identity is the
+   existing user's primary identity, then adds the second-provider identity
+   to that user's `user_identities` rows and mints a fresh session.
+
+### Data model — `user_identities` (slice 4 / #18)
+
+Identity storage is split across two surfaces:
+
+- `users.(provider, provider_user_id)` — the **primary** identity (the
+  original provider this user signed up with). Preserved unchanged across
+  linking — the wire field `User.provider` (singular) continues to point
+  at the original provider after a merge. This keeps the contract surface
+  stable and avoids a `User` schema bump in this Epic; a future
+  "manage linked accounts" Epic can add `GET /api/me/identities` or
+  upgrade `User.provider` to a list without breaking today's consumers.
+- `user_identities.(provider, provider_user_id, user_id)` — the **source
+  of truth** for "all identities this user can sign in with." Holds one
+  row per provider identity, including the primary. Callbacks look users
+  up via this table (`app.auth.identity.find_user_by_identity`) rather
+  than scanning `users.(provider, provider_user_id)` directly. The
+  `(provider, provider_user_id)` unique constraint prevents two users
+  from claiming the same provider identity. Cascade-on-user-delete
+  mirrors `refresh_tokens`.
+
+Migration 0003 backfills the primary identity into `user_identities` for
+every existing user, so the lookup-via-identities path returns the same
+answer for first-time / single-provider users; it additionally returns the
+right user when signing in via a linked secondary provider.
+
+The slice-4 `[backend-dev pushback]` comment on #18 documents the three
+options considered for `User.provider` (keep singular as primary;
+`providers: AuthProvider[]`; separate `/api/me/identities` endpoint) and
+the rationale for picking option 1.
 
 ### Detection vs. resolution
 
@@ -382,17 +445,93 @@ durable but overkill for a self-resolving 5–10 minute flow that would also
 need a sweeper).
 
 **Single-use enforcement.** Without a `jti`, a leaked `link_token` would be
-replayable for the full TTL. The `jti` claim is added at issue time in this
-PR (#14); the **consumer** (#18, `POST /api/auth/link`) is responsible for
-recording each consumed `jti` in `consumed_link_tokens` (or short-TTL Redis
-SETEX keyed on `jti`) and rejecting replays. Decoding via
-`app.auth.link.decode_link_token` exposes the `jti` on `LinkTokenClaims`
-specifically so the consumer can do this; verification itself doesn't
-enforce single-use because that requires storage that doesn't exist yet.
+replayable for the full TTL. The `jti` claim is added at issue time in #14;
+the consumer (#18, `POST /api/auth/link`) records each consumed `jti` in the
+`consumed_link_tokens` table and rejects replays with 401. Storage choice
+landed as a dedicated table (over Redis SETEX) per the slice-4 dispatch
+recommendation on #11 — Redis isn't yet wired into the auth path beyond
+health checks. The table is small (jti PK + two timestamps); cleanup of
+expired rows is a future concern (sweeper job or periodic
+`DELETE WHERE expires_at < now()`).
 
-Resolution lives in **#18** (`POST /api/auth/link`), which validates the
-`link_token`, requires fresh re-authentication with the original provider,
-and merges identities.
+### Resolution — `POST /api/auth/link` (slice 4 / #18)
+
+The consumer endpoint shipping the slice-4 BE half. Request shape:
+
+```json
+{
+  "linkToken": "<jwt from link_required envelope>",
+  "originalProvider": "google",
+  "credential": { "idToken": "..." }
+}
+```
+
+`credential` is the same provider-specific shape the original
+`POST /api/auth/{provider}/callback` accepts (one of
+`GoogleSsoCallbackInput` / `AppleSsoCallbackInput` /
+`FacebookSsoCallbackInput`); the backend re-uses the original provider's
+verifier to validate it.
+
+**Why "fresh provider-A credential" over the alternatives.** Three
+designs were considered for the `second_provider_session_proof` field:
+(a) a fresh provider-A credential, (b) a server-side ephemeral session id,
+(c) re-running the full provider-A callback first and passing the resulting
+access JWT. (a) keeps the route stateless, re-uses existing verifier paths,
+and survives the SDK round-trip naturally on the FE side. (b) would add
+new ephemeral state for a one-shot flow. (c) would mint a session that gets
+discarded immediately and leave a stranded refresh-token row from the
+throwaway sign-in. (a) is the path of least surprise; documented inline in
+the route docstring.
+
+**Failure mapping** (single 401 envelope on every link-token failure so a
+probe can't distinguish "no such jti" from "wrong original provider" from
+"credential failed verification"):
+
+- 401 `invalid_link_token` — link token signature/typ/expiry/structural
+  failure, replay (jti already consumed), `originalProvider` mismatch,
+  existing user no longer exists, credential failed verification, or
+  credential resolves to a different user than the link token's target.
+- 409 `identity_already_linked` — the second-provider identity is already
+  claimed by a _different_ user. Distinguished from the 401 attack-signal
+  cases because this is a genuine merge conflict (e.g. both accounts were
+  created independently); the FE should surface it and route to support.
+- 503 `jwks_unavailable` / `graph_api_unavailable` — original provider's
+  JWKS or Graph API unreachable; client retries.
+- 404 — auth subsystem disabled (`AUTH_ENABLED=false`), same as every
+  other `/api/auth/*` route.
+
+**Side effects on success:**
+
+- New `user_identities` row for `(linkToken.new_provider,
+linkToken.new_provider_user_id, user_id=existing user)`.
+- `consumed_link_tokens` row for `linkToken.jti`.
+- All outstanding refresh tokens for the existing user are revoked (linking
+  is a high-trust state change; treat it the way a password rotation would
+  be treated in a password world).
+- Fresh access JWT + refresh token via `issue_session` — the response is
+  the standard `Session` envelope with `linkRequired: false`.
+
+`users.provider` / `users.provider_user_id` are NOT modified — the primary
+identity is preserved across linking.
+
+**Idempotency on repeated linking attempts.** If the user accidentally
+runs the link flow twice with two distinct link_tokens (each with its own
+`jti`, so neither is a replay), the route detects that the
+`(claims.new_provider, claims.new_provider_user_id)` identity already
+belongs to the same user and skips the `user_identities` insert. The
+unique constraint on `(provider, provider_user_id)` is what keeps this
+honest — without it, concurrent link attempts could quietly create
+duplicate rows. Tested in
+`test_link_route_integration.py::test_repeated_link_with_fresh_jti_idempotent`.
+
+**Apple-relay bypass honored end-to-end.** The Apple callback's
+`is_private_email` short-circuit (#15) means a relay sign-in NEVER
+returns a `link_required` envelope, so the link route is unreachable
+for relay addresses. This is the intended end-to-end behaviour: matching
+on a per-app relay would be spurious, and would let an attacker who
+created a relay address provoke the link flow against any account. Tested
+explicitly in
+`test_link_route_integration.py::test_apple_relay_never_reaches_link_route`.
 
 ### Google specifics
 
@@ -463,6 +602,7 @@ and merges identities.
   Developer portal → Keys, and stored in `APPLE_PRIVATE_KEY` as multi-line
   PEM. The signed JWT is cached in-process for 50 minutes (under the 1-hour
   `exp`) so we don't resign per request.
+
 - **Deferred `client_secret` rotation.** RFC 0001 § Risks tracks the open
   question of a scheduled `.p8` rotation job. We've deferred it: rotation
   cadence is "manually rotate the `.p8` and bounce the process" for now,
@@ -710,8 +850,8 @@ the Facebook button renders disabled in DEV with an actionable error
 prod (safe-prod fallback). Same dev-loud / prod-hide pattern as the other
 two providers.
 
-The 503 failure copy diverges from Google/Apple by appending *"in a few
-minutes"* — Facebook has no JWKS rotation recovery (the trust anchor is
+The 503 failure copy diverges from Google/Apple by appending _"in a few
+minutes"_ — Facebook has no JWKS rotation recovery (the trust anchor is
 Graph itself, see § Facebook specifics), so an immediate retry won't help
 and the copy sets that expectation explicitly. The 401 copy matches the
 Google/Apple precedent verbatim with the provider name swapped.
@@ -746,17 +886,15 @@ contract surface without prematurely building UI that #40 will rework.
 
 The scaffold has the schema and the abstract design. Wiring lands in
 `feat/auth-sso` (Epic #11):
+
 - Full `link_required` linking UI flow on web (slice 4 / #40).
 - Mobile SDK integration (#20).
-- Account-linking *resolution* — `POST /api/auth/link` (#18). Detection is
-  already wired into the Google and Apple callbacks; Facebook never trips
-  the link path because Graph API doesn't expose `email_verified` (see
-  Facebook specifics).
 - `require_buyer` / `require_seller` dependencies (#37 — defer to listings
   / transactions epics where the first consumers land)
 - Scheduled `client_secret` JWT rotation job (RFC 0001 § Risks).
 
 Already landed:
+
 - OpenAPI + TS contract for the auth endpoints (#12, PR #26).
 - `refresh_tokens` table + `RefreshToken` model with rotation/expiry/revocation
   helpers (#22, PR #29).
@@ -791,10 +929,10 @@ Already landed:
   responses surface as a generic error string — the linking UI itself is
   slice 4 (#40). Auth context conventions documented above under
   "Web client (slices 1, 2 & 3 — Google + Apple + Facebook)".
-- **Slice-2 FE** (#38) — *shipped to main 2026-05-04, deferred from
-  product*: Apple sign-in button on `/sign-in` next to the Google one,
+- **Slice-2 FE** (#38) — _shipped to main 2026-05-04, deferred from
+  product_: Apple sign-in button on `/sign-in` next to the Google one,
   wired via the Sign in with Apple JS SDK. Posts `{ idToken, code,
-  name? }` to `POST /api/auth/apple/callback`; on success follows the
+name? }` to `POST /api/auth/apple/callback`; on success follows the
   same redirect path as Google (`?next=` or `/`). `link_required`
   reuses the slice-1 generic-error path; the full link UI is still
   slice 4. Apple-relay email accounts flow through end-to-end
@@ -817,8 +955,8 @@ Already landed:
   permission is requested but optional — when the user declines it, the
   BE persists `email=null` and the FE just lets sign-in complete (the
   reconsent prompt is deferred to a future account-recovery Epic). The
-  503 failure copy diverges from Google/Apple by appending *"in a few
-  minutes"* — Facebook has no JWKS rotation recovery so an immediate
+  503 failure copy diverges from Google/Apple by appending _"in a few
+  minutes"_ — Facebook has no JWKS rotation recovery so an immediate
   retry won't help. New env vars: `VITE_FACEBOOK_ENABLED` and
   `VITE_FACEBOOK_APP_ID` (required when `FACEBOOK_ENABLED=true`).
   Brand colour `#1877F2` lives in `tailwind.config.js` as the
@@ -827,11 +965,30 @@ Already landed:
   deployment** (`FACEBOOK_ENABLED=false`) until a registered Meta App
   ID is wired into both the BE and FE flag pair — the live demo flip
   is gated on Meta App registration.
+- **Slice-4 BE half** (#18): `POST /api/auth/link` — consumes the
+  `link_token` issued by a callback's `link_required` envelope, re-verifies
+  the original-provider credential, and merges the second-provider identity
+  onto the existing user's `user_identities` rows. Schema additions:
+  `user_identities` (source of truth for "all identities a user can sign
+  in with"; primary identity backfilled by migration 0003 from the legacy
+  `users.(provider, provider_user_id)` columns) and `consumed_link_tokens`
+  (single-use enforcement keyed on `link_token.jti`). Callbacks now look
+  users up via `app.auth.identity.find_user_by_identity` rather than
+  scanning `users.(provider, provider_user_id)` directly. `User.provider`
+  on the wire continues to expose the primary provider as a singular
+  scalar — no contract bump on `User`. The endpoint is wired and tested
+  end-to-end across all three providers (Apple integration is exercised
+  by the test matrix even though `APPLE_ENABLED=false` keeps it dormant
+  in active deployments). Apple-relay bypass honored end-to-end: relay
+  sign-ins never produce a link_token, so the link route is unreachable
+  for relay addresses. Cleanup of expired `consumed_link_tokens` rows is
+  a future concern; rows are tiny and accumulation is acceptable. See
+  `docs/auth.md` § "Account linking" for the full resolved semantics.
 - **camelCase wire shape** (#44): the contract drift between
   `shared/openapi.yaml` (snake) and `shared/src/types/` (camel) inherited
   from #12 was resolved by flipping the wire to camelCase via Pydantic
   `alias_generator=to_camel + populate_by_name=True +
-  serialize_by_alias=True` (ADR 0009). The per-endpoint adapter slice 1
+serialize_by_alias=True` (ADR 0009). The per-endpoint adapter slice 1
   shipped in `frontend-web/src/api/client.ts` is retired; web (and mobile,
   when slice 5 lands) consume the typed shapes from `@threadloop/shared`
   directly with no boundary translation.
