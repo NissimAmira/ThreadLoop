@@ -28,8 +28,17 @@ threadloop/
 │   └── tsconfig.json
 │
 ├── frontend-mobile/      Expo (React Native + TS)
-│   ├── App.tsx
-│   ├── app.json              Expo config (bundle IDs, extras)
+│   ├── App.tsx               Root component (AuthProvider + RootNavigator)
+│   ├── app.json              Expo config (bundle IDs, `threadloop://` scheme, plugins)
+│   ├── src/
+│   │   ├── api/              HTTP client (`@threadloop/shared` + `ApiError`)
+│   │   ├── auth/             AuthContext + secureStore + per-provider helpers
+│   │   ├── components/       LinkAccountsModal
+│   │   ├── config/           Runtime env config (EXPO_PUBLIC_* parser)
+│   │   ├── navigation/       RootNavigator (auth-gated stack switch)
+│   │   └── screens/          SignInScreen + MeScreen
+│   ├── .env.example          EXPO_PUBLIC_* env var template
+│   ├── jest.setup.js         Jest setup (Platform.OS pin for jsdom path)
 │   └── tsconfig.json
 │
 ├── shared/               Cross-package contracts

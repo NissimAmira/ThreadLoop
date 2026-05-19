@@ -34,17 +34,22 @@ GitHub App, production Dockerfiles, phased DevOps roadmap, docs-as-part-of-done
 policy, local CR subagent, task management via GitHub Projects + RFC/ADR
 conventions, and a multi-agent dev cycle simulating a real product team.
 
-**Auth (Epic #11) is partially shipped — Google (slice 1) and Facebook
-(slice 3) web sign-in are live, the cross-provider account-linking flow
-(slice 4) is wired end-to-end on web; Apple (slice 2) shipped descoped:
-code is in main but gated off behind `APPLE_ENABLED=false` /
-`VITE_APPLE_ENABLED=false` awaiting Apple Developer Program enrollment.**
-A user can hit `/sign-in`, sign in with Google or Facebook, land on
-`/me` showing their display name, refresh, and log out. If the BE
-detects a verified-email collision across providers, the user sees a
-modal explaining the link, re-authenticates with the original provider,
-and ends up with a single merged account that signs in via either
-provider. What's in main today:
+**Auth (Epic #11) is shipped — Google (slice 1) and Facebook (slice 3)
+sign-in are live on both web and mobile, the cross-provider account-
+linking flow (slice 4) is wired end-to-end on web, and the mobile
+SDK integration (slice 5) ships Google + Facebook on iOS and Android
+via `expo-auth-session`. Apple (slice 2) shipped descoped: web code is
+in main but gated off behind `APPLE_ENABLED=false` /
+`VITE_APPLE_ENABLED=false`, and mobile Apple was dropped from #20 per
+the 2026-05-04 scope revision; both stay deferred until Apple Developer
+Program enrollment (tracked as Epic #57).**
+A user can hit `/sign-in` on web or open the Expo app, sign in with
+Google or Facebook, land on a `/me` view showing their display name,
+refresh / cold-start the client, and log out. If the BE detects a
+verified-email collision across providers, the user sees a modal
+explaining the link, re-authenticates with the original provider, and
+ends up with a single merged account that signs in via either provider.
+What's in main today:
 
 - All three provider callbacks on the backend (`POST /api/auth/{google,apple,facebook}/callback`)
   with provider-specific verifiers (Google + Apple JWKS, Facebook Graph API
@@ -72,22 +77,35 @@ provider. What's in main today:
   smoke at `cypress/e2e/sign-in-link.cy.ts`.
 - Wire shape: **camelCase end-to-end** (Pydantic `alias_generator=to_camel`,
   see [ADR 0009](./docs/adrs/0009-camelcase-on-the-wire.md)). The shared TS
-  types in `@threadloop/shared` are consumed directly by the web client with
-  no per-endpoint adapter.
+  types in `@threadloop/shared` are consumed directly by both the web and
+  mobile clients with no per-endpoint adapter.
+- Mobile: Expo `SignInScreen` rendering Google + Facebook buttons via
+  `expo-auth-session`, mirroring the web `AuthContext` three-state machine
+  (`loading` / `anonymous` / `authenticated`) with silent-refresh on cold
+  start. Access JWT cached in `expo-secure-store`; refresh token rides the
+  httpOnly cookie via React Native's `fetch` cookie jar. Same
+  `LinkAccountsModal` flow as web (mirroring the WAI-ARIA dialog pattern
+  using RN primitives — `<Modal>` + `accessibilityLiveRegion`).
 
-**Still pending in Epic #11:** the mobile SDK integrations (slice 5: #20). Slice-by-slice
-rollout per RFC 0001, gated by per-provider feature flags as BE+FE pairs
+**Epic #11 closes with this slice.** Still deferred outside this Epic:
+Apple-on-iOS native sign-in (tracked as Epic #57 — re-activates when the
+project owner enrolls in the Apple Developer Program and prepares the App
+Store submission Epic). Slice-by-slice rollout per RFC 0001, gated by
+per-provider feature flags as BE+FE+mobile triples
 (BE: `GOOGLE_ENABLED` / `APPLE_ENABLED` / `FACEBOOK_ENABLED`; FE:
-`VITE_GOOGLE_ENABLED` / `VITE_APPLE_ENABLED` / `VITE_FACEBOOK_ENABLED`) so
+`VITE_GOOGLE_ENABLED` / `VITE_APPLE_ENABLED` / `VITE_FACEBOOK_ENABLED`;
+mobile: `EXPO_PUBLIC_GOOGLE_ENABLED` / `EXPO_PUBLIC_APPLE_ENABLED` /
+`EXPO_PUBLIC_FACEBOOK_ENABLED`) so
 each slice's deployment only requires that provider's secrets — a
 Google-only deploy boots with `AUTH_ENABLED=true` + `GOOGLE_ENABLED=true` +
-`VITE_GOOGLE_ENABLED=true` and no Apple/FB values; the Google + Facebook
-deploy currently in main additionally flips `FACEBOOK_ENABLED=true` +
-`VITE_FACEBOOK_ENABLED=true` with `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` /
-`VITE_FACEBOOK_APP_ID` configured against a Meta App. See
-[`docs/auth.md`](./docs/auth.md) "Per-provider gating" + "What's not
-implemented yet" for the full list and `feat/auth-sso` Epic #11 for issue
-tracking.
+`VITE_GOOGLE_ENABLED=true` + `EXPO_PUBLIC_GOOGLE_ENABLED=true` and no
+Apple/FB values; the Google + Facebook deploy currently in main
+additionally flips `FACEBOOK_ENABLED=true` + `VITE_FACEBOOK_ENABLED=true`
++ `EXPO_PUBLIC_FACEBOOK_ENABLED=true` with `FACEBOOK_APP_ID` /
+`FACEBOOK_APP_SECRET` / `VITE_FACEBOOK_APP_ID` /
+`EXPO_PUBLIC_FACEBOOK_APP_ID` configured against a Meta App. See
+[`docs/auth.md`](./docs/auth.md) "Per-provider gating" for the full
+matrix and `feat/auth-sso` Epic #11 for issue tracking.
 
 **Other product features** (listings, search, transactions, AR viewer) still
 have **schemas and design docs but no implementation yet** — each domain doc

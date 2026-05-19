@@ -1,8 +1,9 @@
 # RFC 0001: SSO authentication (Google / Apple / Facebook)
 
-- **Status:** Partially implemented (Google + Facebook web live;
-  cross-provider account-linking live on web; Apple descoped — see
-  § Deferred providers; mobile SDK integration pending)
+- **Status:** Partially implemented — active scope (Google + Facebook on
+  web and mobile, plus cross-provider account-linking) is live in main.
+  Apple sign-in is descoped from this Epic and tracked under Epic #57
+  for re-activation; see § "Deferred providers" below.
 - **Author:** Nissim
 - **Created:** 2026-04-30
 - **Approved:** 2026-04-30
@@ -33,10 +34,15 @@
   (#40) landed in PR #65 with the `LinkAccountsDialog` modal
   implementing the WAI-ARIA APG dialog pattern, the 401 / 409 / 503
   failure mapping from PR #64, and a 10-minute client-side TTL
-  matching the BE's default. Touch-target sweep follow-up tracked
-  in #66 (P2) — to land before slice 5 mirrors the pattern on mobile.
-- **Remaining slices in this Epic:** mobile SDK integration (#20,
-  Apple-on-iOS dropped from scope). Slice 5 closes the Epic.
+  matching the BE's default.
+- **Slice 5 shipped (Epic-closing):** 2026-05-19 — mobile SDK
+  integration (#20). Expo / RN client renders Google + Facebook
+  buttons via `expo-auth-session`, mirrors the web `AuthContext`
+  three-state machine (silent refresh on cold start), persists the
+  access JWT to `expo-secure-store`, and ports the `LinkAccountsDialog`
+  flow as `LinkAccountsModal` using RN primitives. Apple-on-iOS was
+  dropped from this slice per § "Deferred providers" — re-enters
+  scope at the App Store submission Epic (#57).
 
 ## TL;DR
 
@@ -356,25 +362,29 @@ Active scope (Google + Facebook on web and mobile):
 
 - [x] User can sign in via Google on web (Chrome, Firefox, Safari).
       *(Slice 1 shipped 2026-05-03.)*
-- [ ] User can sign in via Facebook on web.
-- [ ] User can sign in via Google on iOS and Android.
-- [ ] User can sign in via Facebook on iOS and Android.
-- [ ] Account-linking prompt fires when email collision is detected
+- [x] User can sign in via Facebook on web. *(Slice 3 shipped 2026-05-09.)*
+- [x] User can sign in via Google on iOS and Android.
+      *(Slice 5 shipped 2026-05-19.)*
+- [x] User can sign in via Facebook on iOS and Android.
+      *(Slice 5 shipped 2026-05-19.)*
+- [x] Account-linking prompt fires when email collision is detected
       across providers (Google ↔ Facebook in this Epic — Facebook's
       side never fires in practice because the Graph API doesn't
       expose `email_verified`; see `docs/auth.md` § "Facebook
       specifics"). Apple ↔ Google linking is shipped in code but
-      unreachable while `APPLE_ENABLED=false`.
-- [ ] Session expires after 30 days of inactivity (refresh token expiry).
-- [ ] Logout revokes the refresh token; subsequent /api/auth/refresh
-      returns 401.
-- [ ] /api/me returns the current user with the correct shape per the
-      OpenAPI spec.
-- [ ] Test coverage: integration tests per active provider against
+      unreachable while `APPLE_ENABLED=false`. *(Web: slice 4
+      shipped 2026-05-19. Mobile: slice 5 shipped 2026-05-19.)*
+- [x] Session expires after 30 days of inactivity (refresh token
+      expiry). *(Slice 1 shipped.)*
+- [x] Logout revokes the refresh token; subsequent /api/auth/refresh
+      returns 401. *(Slice 1 shipped.)*
+- [x] /api/me returns the current user with the correct shape per the
+      OpenAPI spec. *(Slice 1 shipped.)*
+- [x] Test coverage: integration tests per active provider against
       test JWKS; unit tests for the session middleware.
-- [ ] OpenAPI spec is updated and Schemathesis (when wired) finds no
+- [x] OpenAPI spec is updated and Schemathesis (when wired) finds no
       drift.
-- [ ] `docs/auth.md` "What's not implemented yet" reflects what shipped.
+- [x] `docs/auth.md` "What's not implemented yet" reflects what shipped.
 
 Deferred (do NOT block Epic closure — see § "Deferred providers"):
 

@@ -962,20 +962,182 @@ that would clobber the link state.
 
 ### Out of scope here
 
-Mobile linking (#20, slice 5) ships in its own Epic surface. The
-account-unlinking flow and the "manage linked accounts" settings UI
+The account-unlinking flow and the "manage linked accounts" settings UI
 are deferred to future tasks — there's no UI for them yet because
-there's no consumer.
+there's no consumer. Mobile linking shipped with slice 5 (#20) using
+the same `POST /api/auth/link` contract — see § "Mobile client (slice
+5 / #20)" below.
+
+## Mobile client (slice 5 / #20)
+
+The Expo / React Native client ships with the mobile equivalents of
+the slice-1/3/4 web surfaces. Google + Facebook sign-in on iOS and
+Android, the same `AuthContext` three-state machine, and the same
+`LinkAccountsModal` for cross-provider account-linking. Apple is
+descoped per § "Per-provider gating" and § "Deferred providers" in
+RFC 0001 — `expo-apple-authentication` is **not** bundled in this
+slice.
+
+### Per-provider gating — `EXPO_PUBLIC_*` flags
+
+The mobile client mirrors the web client's per-provider flag pattern.
+Strict `=== "true"` parse: any value other than the literal string
+`true` (including unset) resolves to `false`. The flags live in
+`frontend-mobile/.env.example`:
+
+- `EXPO_PUBLIC_GOOGLE_ENABLED` (default `true` in `.env.example`).
+- `EXPO_PUBLIC_FACEBOOK_ENABLED` (default `true`).
+- `EXPO_PUBLIC_APPLE_ENABLED` (default `false`; gate exists for
+  symmetry with web but flipping it alone won't surface a button —
+  `expo-apple-authentication` is not bundled).
+- Per-platform Google OAuth client IDs:
+  `EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS` and
+  `EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID`. Distinct OAuth credentials
+  from the same Google Cloud project as the BE's `GOOGLE_CLIENT_ID`
+  (which is the web credential).
+- `EXPO_PUBLIC_FACEBOOK_APP_ID` — same Meta App as the BE's
+  `FACEBOOK_APP_ID`.
+
+Setup walkthrough (Google Cloud Console flow, Meta App registration,
+key hashes) lives in
+[`frontend-mobile/README.md`](../frontend-mobile/README.md) §
+"Sign-in setup".
+
+### Auth context — `src/auth/AuthContext.tsx`
+
+Same shape as the web client. Three-state machine
+(`loading` / `anonymous` / `authenticated`), silent-refresh on first
+mount via `POST /api/auth/refresh`. The mobile context adds two
+deltas over web:
+
+1. **Access JWT mirrored to `expo-secure-store`.** The token still
+   lives in memory as the canonical reference for hot paths, but
+   `setAccessToken` mirrors it into the platform secure store so a
+   cold-start can hydrate the user view immediately. Refresh token
+   continues to be the httpOnly cookie — React Native's `fetch`
+   cookie jar respects it transparently with
+   `credentials: "include"`.
+2. **Network-failure fallback to stored token + `/api/me`.** If
+   `POST /api/auth/refresh` fails with a network error (not a 401),
+   the context tries the cached access token against `/api/me`. If
+   that succeeds, the user lands on the authenticated state with the
+   last-known profile and a stale-but-still-valid access token. If
+   `/api/me` 401s, the stored token is cleared and the user lands on
+   anonymous. The cookie-only web client doesn't need this branch
+   because its refresh path is the only auth-state reconstruction
+   surface.
+
+The secure-store wrapper at `src/auth/secureStore.ts` falls back to
+an in-memory map on web / jsdom (where `expo-secure-store` throws)
+so `expo start --web` and jest both work without conditional code in
+the call sites.
+
+### Per-provider sign-in — `expo-auth-session`
+
+Google and Facebook share the same SDK (`expo-auth-session`) on
+mobile. The provider modules wrap `useIdTokenAuthRequest` (Google)
+and `useAuthRequest` (Facebook) with typed extractors so the
+`SignInScreen` doesn't need to know the SDK shape:
+
+- `src/auth/google.ts` — exposes `useGoogleAuth()` and
+  `extractGoogleIdToken()`. The hook requests the OIDC `id_token`
+  scope explicitly so the backend's `POST /api/auth/google/callback`
+  receives the same shape the web client posts.
+- `src/auth/facebook.ts` — exposes `useFacebookAuth()` and
+  `extractFacebookAccessToken()`. The `email` permission is requested
+  but optional; declining it lets sign-in complete with
+  `email=null` (mirrors web).
+
+The Google provider needs per-platform client IDs because the Google
+Cloud Console issues distinct OAuth credentials per platform.
+`expo-auth-session` picks the right one based on `Platform.OS` at
+runtime. Apps Store-side bundle ID validation against
+`com.threadloop.app` (from `app.json -> ios.bundleIdentifier`) is
+done on the OAuth credential — the SDK doesn't need to know about
+it.
+
+### Sign-in flow
+
+1. User opens the app cold. `AuthProvider` mounts and runs the
+   silent-refresh round-trip.
+2. If the refresh cookie is valid, the user lands on `MeScreen`
+   directly.
+3. Otherwise the user lands on `SignInScreen` with Google +
+   Facebook buttons.
+4. Tapping a button calls `promptAsync()` from the matching
+   `expo-auth-session` provider, which opens the in-app browser
+   (Safari View Controller on iOS, Custom Tabs on Android) on the
+   provider's consent screen.
+5. On consent, the provider redirects back to the app via the
+   `threadloop://` deep-link scheme registered in `app.json`. The
+   SDK resolves the in-flight `useAuthRequest` promise with the
+   credential.
+6. The screen extracts the credential (`id_token` for Google,
+   `accessToken` for Facebook) and posts to the matching
+   `/api/auth/{provider}/callback`. Same wire shape as web.
+7. On `Session.linkRequired: true`, `LinkAccountsModal` opens with
+   the link token + original provider. The user re-auths with the
+   original provider, the modal posts to `POST /api/auth/link`, and
+   on 200 the merged session is promoted via `useAuth().signIn()`.
+8. On a happy `Session`, `useAuth().signIn()` switches
+   `RootNavigator` to `MeScreen` showing display name, email, and
+   provider.
+
+### Sign-out
+
+Tapping **Sign out** on `MeScreen` posts `POST /api/auth/logout`
+(which revokes the refresh cookie BE-side), clears the
+`expo-secure-store` mirror, and drops the in-memory state to
+`anonymous`. Idempotent — if the logout call fails the FE still
+returns to anonymous (refresh cookie is revoked next time the user
+signs in).
+
+### `LinkAccountsModal` — `src/components/LinkAccountsModal.tsx`
+
+Mirrors `frontend-web/src/components/LinkAccountsDialog.tsx`. Same
+state machine (`idle` / `exchanging` / `expired` / `conflict` /
+`unreachable`), same failure mapping (401 / 409 / 503 per PR #64's
+"Failure mapping"), same 10-minute client-side TTL matching the
+BE's default `link_token_ttl_seconds=600`. Differences from web:
+
+- Uses RN `<Modal>` (which natively handles the back-button on
+  Android and the swipe-to-dismiss gesture on iOS) rather than a
+  div overlay.
+- `accessibilityLiveRegion="polite"` on the status text rather than
+  the web's `aria-live="polite"` region. Same intent — JAWS / NVDA
+  on web, VoiceOver / TalkBack on mobile.
+- 44pt touch targets on the close button (`width: 44, height: 44`)
+  for iOS HIG / Material accessibility compliance.
+- Apple is not a possible original provider in the active mobile
+  build (`expo-apple-authentication` not bundled). If the BE ever
+  returns `linkProvider: "apple"` on a mobile callback — which
+  shouldn't happen while `APPLE_ENABLED=false` server-side — the
+  modal renders a "contact support" recovery message rather than a
+  non-functional Apple button.
+
+### Out of scope in this slice
+
+- Apple-on-iOS native sign-in (Epic #57).
+- Push notifications and deep links beyond `expo-auth-session`'s
+  redirect URI handling.
+- Detox E2E tests — set up per release, not per PR.
+- EAS / store-signing config (separate `Infra` task tied to first
+  publish).
 
 ## What's not implemented yet
 
-The scaffold has the schema and the abstract design. Wiring lands in
-`feat/auth-sso` (Epic #11):
+Epic #11 is closed with slice 5. Still open under their own surfaces:
 
-- Mobile SDK integration (#20).
-- `require_buyer` / `require_seller` dependencies (#37 — defer to listings
-  / transactions epics where the first consumers land)
-- Scheduled `client_secret` JWT rotation job (RFC 0001 § Risks).
+- Apple sign-in re-activation (Epic #57 — re-enters scope when the
+  project owner enrolls in the Apple Developer Program and prepares
+  for App Store submission; the existing web + BE code is gated
+  off, not removed).
+- `require_buyer` / `require_seller` dependencies (#37 — defer to
+  listings / transactions epics where the first consumers land).
+- Scheduled `client_secret` JWT rotation job (RFC 0001 § Risks —
+  moot while Apple is deferred; revisit at re-activation).
+- Account-unlinking flow and the "manage linked accounts" settings
+  UI. Deferred until there's a consumer.
 
 Already landed:
 
@@ -1105,6 +1267,30 @@ name? }` to `POST /api/auth/apple/callback`; on success follows the
   from #12 was resolved by flipping the wire to camelCase via Pydantic
   `alias_generator=to_camel + populate_by_name=True +
 serialize_by_alias=True` (ADR 0009). The per-endpoint adapter slice 1
-  shipped in `frontend-web/src/api/client.ts` is retired; web (and mobile,
-  when slice 5 lands) consume the typed shapes from `@threadloop/shared`
+  shipped in `frontend-web/src/api/client.ts` is retired; the web and
+  mobile clients both consume the typed shapes from `@threadloop/shared`
   directly with no boundary translation.
+- **Slice-5 mobile** (#20): Expo / React Native client for the SSO
+  sign-in flow on iOS and Android. `SignInScreen` renders Google +
+  Facebook buttons via `expo-auth-session` (no native Apple — Apple
+  was dropped from #20 per the 2026-05-04 scope revision; tracked
+  under Epic #57). `AuthContext` mirrors the web three-state machine
+  with two mobile-specific deltas: access JWT mirrored to
+  `expo-secure-store` for cold-start hydration, and a network-failure
+  fallback to the cached token + `/api/me` so offline users see their
+  last-known profile rather than a sign-in screen. `LinkAccountsModal`
+  mirrors the web `LinkAccountsDialog` state machine using RN
+  primitives (`<Modal>`, `accessibilityLiveRegion="polite"`); 401 /
+  409 / 503 failure mapping and 10-minute client-side TTL identical
+  to web. RootNavigator is `@react-navigation/native-stack`. New env
+  vars: `EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_{GOOGLE,APPLE,FACEBOOK}_ENABLED`,
+  `EXPO_PUBLIC_GOOGLE_CLIENT_ID_{IOS,ANDROID}`,
+  `EXPO_PUBLIC_FACEBOOK_APP_ID`. Apple gate stays `false` by default
+  and is non-functional in this build (no `expo-apple-authentication`
+  bundled). Setup walkthrough in
+  [`frontend-mobile/README.md`](../frontend-mobile/README.md) §
+  "Sign-in setup". Jest unit coverage at
+  `frontend-mobile/src/auth/AuthContext.test.tsx` covers the
+  silent-refresh / 401 / link-required-defensive /
+  network-failure-fallback / signIn / signOut state transitions.
+  This is the Epic-closing slice.

@@ -70,7 +70,7 @@ threadloop/
 ## Roadmap
 
 - [x] Monorepo scaffold + health-check flow
-- [ ] SSO authentication (Google / Apple / Facebook)
+- [x] SSO authentication (Google / Apple / Facebook)
 - [ ] User profiles & seller onboarding
 - [ ] Listings CRUD + image pipeline
 - [ ] Meilisearch integration + faceted search
