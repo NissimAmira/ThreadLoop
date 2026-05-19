@@ -3,18 +3,36 @@
     "name": "ThreadLoop",
     "slug": "threadloop",
     "version": "0.1.0",
+    "scheme": "threadloop",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.threadloop.app",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "com.threadloop.app"
+      "package": "com.threadloop.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [
+            { "scheme": "threadloop" }
+          ],
+          "autoVerify": false
+        }
+      ]
     },
     "web": {
       "bundler": "metro"
     },
+    "plugins": [
+      "expo-secure-store",
+      "expo-web-browser"
+    ],
     "extra": {
       "apiUrl": "http://localhost:8000"
     }
