@@ -812,9 +812,8 @@ the Apple button renders disabled rather than launching a broken popup.
 override only when the build is served from an origin different from the
 one registered against the Apple Service ID.
 
-`link_required` responses on the Apple branch surface the same generic
-"This email is registered with another provider…" message as Google
-(slice-4 / #40 will replace it with the full re-auth UI). Apple-relay
+`link_required` responses on the Apple branch are intercepted by the
+slice-4 `LinkAccountsDialog` (see § Link UI (slice 4 / #40)). Apple-relay
 emails (`*@privaterelay.appleid.com`) flow through unchanged — the
 backend's `is_private_email` bypass means the relay account always lands
 as a fresh identity, and the FE just renders whatever email the BE
@@ -867,13 +866,12 @@ account-recovery Epic, where it has a real destination — adding a
 nag-prompt for a feature that doesn't exist yet would be friction without
 purpose. See ux-designer advisory on #39 § 1 for the full reasoning.
 
-`link_required` responses on the Facebook branch surface the same
-generic message as Google + Apple (slice 4 / #40 will replace it with
-the full re-auth UI). In practice the branch is unreachable for Facebook
-because Graph API doesn't expose `email_verified` and the BE treats every
-Facebook email as unverified — see § Facebook specifics for the full
-analysis. The handling is kept verbatim so a future Graph response shape
-change plugs in cleanly.
+`link_required` responses on the Facebook branch are intercepted by the
+slice-4 `LinkAccountsDialog` (see § Link UI (slice 4 / #40)). In practice
+the branch is unreachable for Facebook because Graph API doesn't expose
+`email_verified` and the BE treats every Facebook email as unverified —
+see § Facebook specifics for the full analysis. The handling is kept
+verbatim so a future Graph response shape change plugs in cleanly.
 
 ### Link UI (slice 4 / #40)
 
@@ -1012,9 +1010,10 @@ Already landed:
   email, `useAuth()` context with silent-refresh on first paint, header
   reflecting the signed-in user, and a Cypress smoke test that stubs the
   Google flow and asserts the user lands on `/me`. `link_required`
-  responses surface as a generic error string — the linking UI itself is
-  slice 4 (#40). Auth context conventions documented above under
-  "Web client (slices 1, 2 & 3 — Google + Apple + Facebook)".
+  responses on slice 1 surfaced as a generic error string; slice 4
+  (#40) replaced that with the `LinkAccountsDialog` modal. Auth
+  context conventions documented above under "Web client (slices 1,
+  2, 3 & 4 — Google + Apple + Facebook + linking)".
 - **Slice-2 FE** (#38) — _shipped to main 2026-05-04, deferred from
   product_: Apple sign-in button on `/sign-in` next to the Google one,
   wired via the Sign in with Apple JS SDK. Posts `{ idToken, code,
