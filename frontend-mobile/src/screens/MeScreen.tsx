@@ -28,7 +28,7 @@ const dotColor: Record<DependencyStatus | "unknown", string> = {
 };
 
 export function MeScreen() {
-  const { state, signOut } = useAuth();
+  const { state, offline, signOut } = useAuth();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
 
@@ -76,6 +76,18 @@ export function MeScreen() {
 
   return (
     <View style={styles.root}>
+      {offline && (
+        <View
+          accessibilityRole="alert"
+          accessibilityLabel="Working offline — some features may be unavailable"
+          style={styles.offlineBanner}
+          testID="me-offline-banner"
+        >
+          <Text style={styles.offlineBannerText}>
+            Working offline — some features may be unavailable
+          </Text>
+        </View>
+      )}
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.card}>
           <Text accessibilityRole="header" style={styles.title}>
@@ -195,4 +207,17 @@ const styles = StyleSheet.create({
   },
   dot: { width: 10, height: 10, borderRadius: 5 },
   statusText: { fontSize: 14, color: "#374151" },
+  offlineBanner: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: "#fef3c7",
+    borderBottomWidth: 1,
+    borderBottomColor: "#fde68a",
+  },
+  offlineBannerText: {
+    fontSize: 13,
+    color: "#92400e",
+    fontWeight: "500",
+    textAlign: "center",
+  },
 });

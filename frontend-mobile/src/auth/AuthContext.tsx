@@ -33,6 +33,12 @@ import {
  * refresh token is the httpOnly cookie set by the backend; React
  * Native's `fetch` cookie jar handles it transparently with
  * `credentials: "include"`.
+ *
+ * `offline` is a sibling flag (not a state) — it's only ever true when
+ * we degraded onto the cached-token + `/api/me` path because the
+ * `/api/auth/refresh` round-trip threw a network failure (or 5xx).
+ * Screens (e.g. MeScreen) surface a "Working offline" banner when set.
+ * The next successful refresh clears it.
  */
 export type AuthState =
   | { status: "loading" }
@@ -41,6 +47,8 @@ export type AuthState =
 
 export interface AuthContextValue {
   state: AuthState;
+  /** True when we hydrated via the cached-token degraded path. */
+  offline: boolean;
   /** Promote a fresh callback Session into the active in-memory state. */
   signIn: (session: AuthenticatedSession) => void;
   /** Revoke the refresh cookie server-side and drop the in-memory state. */
@@ -51,6 +59,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
+  const [offline, setOffline] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,10 +76,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // The refresh route should never return a link-required
           // envelope; treat as anonymous defensively.
           await clearAccessToken();
+          setOffline(false);
           setState({ status: "anonymous" });
           return;
         }
         await setAccessToken(session.accessToken);
+        setOffline(false);
         setState({
           status: "authenticated",
           user: session.user,
@@ -78,26 +89,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof ApiError) {
-          // 401 = no valid refresh cookie. Drop any stale stored
-          // access token so a later sign-in starts fresh.
+        // Only a genuine 401 from `/api/auth/refresh` means "no valid
+        // refresh cookie" — anything else (5xx, 429, network reject)
+        // is a transport / availability problem and should fall
+        // through to the degraded cached-token path rather than
+        // signing the user out. Mirrors the documented intent in
+        // `docs/auth.md` § "Network-failure fallback".
+        if (err instanceof ApiError && err.status === 401) {
+          // Drop any stale stored access token so a later sign-in
+          // starts fresh.
           await clearAccessToken();
+          setOffline(false);
           setState({ status: "anonymous" });
           return;
         }
-        // Network failure during hydration: try the stored access
-        // token + /api/me as a degraded path so offline-but-recently-
-        // signed-in users see their last-known profile rather than a
-        // sign-in screen. If the stored token has expired the BE
-        // will 401 and we fall back to anonymous.
+        // Transport / availability failure during hydration: try the
+        // stored access token + /api/me as a degraded path so
+        // offline-but-recently-signed-in users see their last-known
+        // profile rather than a sign-in screen. This is safe because
+        // the fallback still round-trips to the backend — a
+        // server-revoked or expired token will 401 from /api/me and
+        // we'll clear the cache and fall back to anonymous; a
+        // truly-offline /api/me also throws and clears. So a cached
+        // token never grants offline access to a logged-out account.
         try {
           const stored = await getAccessToken();
           if (!stored) {
+            setOffline(false);
             setState({ status: "anonymous" });
             return;
           }
           const user = await api.me(stored);
           if (cancelled) return;
+          setOffline(true);
           setState({
             status: "authenticated",
             user,
@@ -106,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch {
           if (cancelled) return;
           await clearAccessToken();
+          setOffline(false);
           setState({ status: "anonymous" });
         }
       }
@@ -119,6 +144,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback((session: AuthenticatedSession) => {
     void setAccessToken(session.accessToken);
+    // A fresh callback session is by definition online; clear any
+    // lingering offline flag from a prior degraded hydrate.
+    setOffline(false);
     setState({
       status: "authenticated",
       user: session.user,
@@ -135,12 +163,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // in-memory and on-device state.
     }
     await clearAccessToken();
+    setOffline(false);
     setState({ status: "anonymous" });
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ state, signIn, signOut }),
-    [state, signIn, signOut],
+    () => ({ state, offline, signIn, signOut }),
+    [state, offline, signIn, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

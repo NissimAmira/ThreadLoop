@@ -141,9 +141,10 @@ describe("AuthContext", () => {
     apiMock.auth.refresh.mockRejectedValueOnce(new TypeError("Network down"));
     apiMock.me.mockResolvedValueOnce(TEST_USER);
 
+    const ctxRef: { current: ReturnType<typeof useAuth> | null } = { current: null };
     const { getByTestId } = render(
       <AuthProvider>
-        <Probe onReady={() => undefined} />
+        <Probe onReady={(ctx) => { ctxRef.current = ctx; }} />
       </AuthProvider>,
     );
 
@@ -151,6 +152,37 @@ describe("AuthContext", () => {
       expect(getByTestId("probe-status").props.children).toBe("authenticated");
     });
     expect(apiMock.me).toHaveBeenCalledWith("cached-token");
+    // Degraded hydrate path sets `offline=true` so screens can render
+    // the "Working offline" banner.
+    expect(ctxRef.current?.offline).toBe(true);
+  });
+
+  it("falls back to cached token on a 5xx from /api/auth/refresh (not just network reject)", async () => {
+    // Regression test: previously any `ApiError` (including 5xx)
+    // signed the user out. Per `docs/auth.md` § "Network-failure
+    // fallback", only a genuine 401 should drop the token; 5xx is a
+    // transport / availability failure and should hit the same
+    // cached-token + /api/me degraded path as a network reject.
+    await secureStore.setAccessToken("cached-token");
+    apiMock.auth.refresh.mockRejectedValueOnce(
+      new ApiError(503, "service_unavailable"),
+    );
+    apiMock.me.mockResolvedValueOnce(TEST_USER);
+
+    const ctxRef: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    const { getByTestId } = render(
+      <AuthProvider>
+        <Probe onReady={(ctx) => { ctxRef.current = ctx; }} />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("probe-status").props.children).toBe("authenticated");
+    });
+    expect(apiMock.me).toHaveBeenCalledWith("cached-token");
+    // Cached token must NOT be cleared on a transient 5xx.
+    expect(await secureStore.getAccessToken()).toBe("cached-token");
+    expect(ctxRef.current?.offline).toBe(true);
   });
 
   it("signIn promotes a fresh callback session into authenticated state", async () => {
