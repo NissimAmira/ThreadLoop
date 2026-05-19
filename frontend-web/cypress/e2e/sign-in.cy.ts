@@ -91,7 +91,7 @@ describe("ThreadLoop sign-in (slice 1: Google)", () => {
     cy.get('[data-testid="app-header-display-name"]').should("have.text", "Ada Lovelace");
   });
 
-  it("linkRequired response shows a generic error instead of redirecting", () => {
+  it("linkRequired response opens the link-accounts modal (slice 4 / #40)", () => {
     cy.intercept("POST", "/api/auth/google/callback", {
       statusCode: 200,
       body: { linkRequired: true, linkProvider: "apple", linkToken: "link-jwt" },
@@ -127,10 +127,10 @@ describe("ThreadLoop sign-in (slice 1: Google)", () => {
     cy.wait("@googleCallbackLink");
 
     cy.location("pathname").should("eq", "/sign-in");
-    cy.get('[data-testid="sign-in-error"]').should(
-      "contain.text",
-      "registered with another provider",
-    );
+    cy.get('[data-testid="link-accounts-dialog"]')
+      .should("be.visible")
+      .and("contain.text", "Apple");
+    cy.get('[data-testid="sign-in-error"]').should("have.text", "");
   });
 });
 

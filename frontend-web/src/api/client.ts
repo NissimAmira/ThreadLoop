@@ -2,6 +2,7 @@ import type {
   AppleSsoCallbackInput,
   FacebookSsoCallbackInput,
   HealthResponse,
+  LinkRequestInput,
   Session,
   User,
 } from "@threadloop/shared";
@@ -105,6 +106,24 @@ export const api = {
      */
     facebookCallback: (input: FacebookSsoCallbackInput): Promise<Session> =>
       request<Session>("/api/auth/facebook/callback", {
+        method: "POST",
+        body: input,
+      }),
+
+    /**
+     * POST /api/auth/link — resolve a pending account-link by re-authenticating
+     * with the original provider. Consumes the short-lived `linkToken` issued
+     * by a callback's `link_required` envelope. On success the second-provider
+     * identity is merged onto the existing user's `user_identities` rows and
+     * the response is the standard `Session` envelope (with `linkRequired:
+     * false`).
+     *
+     * The BE collapses every link-token-or-credential failure into a single
+     * 401 envelope (per PR #64's "Failure mapping"); 409 is reserved for the
+     * second-provider identity already being claimed by a different user.
+     */
+    link: (input: LinkRequestInput): Promise<Session> =>
+      request<Session>("/api/auth/link", {
         method: "POST",
         body: input,
       }),

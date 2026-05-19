@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import type { AuthProvider, AuthenticatedSession } from "@threadloop/shared";
 import { ApiError, api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { loadGoogleIdentity } from "../auth/google";
@@ -8,9 +9,7 @@ import { composeAppleDisplayName, loadAppleIdentity } from "../auth/apple";
 import type { AppleSignInResponse } from "../auth/apple";
 import { loadFacebookIdentity } from "../auth/facebook";
 import type { FacebookLoginResponse } from "../auth/facebook";
-
-const LINK_REQUIRED_MESSAGE =
-  "This email is registered with another provider; please sign in with that provider instead.";
+import { LinkAccountsDialog } from "../components/LinkAccountsDialog";
 
 // Per-provider FE flags mirror the BE's `*_ENABLED` flags (see
 // docs/auth.md § Per-provider gating). Strict `=== "true"` parse: anything
@@ -104,6 +103,64 @@ export function SignInPage() {
   const [facebookStatus, setFacebookStatus] = useState<FacebookStatus>("idle");
   const [facebookBusy, setFacebookBusy] = useState(false);
 
+  // Slice 4 (#40) — pending account-link state. When a callback returns
+  // `linkRequired: true` the modal opens with the original-provider button
+  // highlighted, the user re-auths with that provider, and the modal posts
+  // to `POST /api/auth/link`. Lives in component state (NOT localStorage)
+  // per AC: a page reload provably wipes the token.
+  const [pendingLink, setPendingLink] = useState<{
+    token: string;
+    provider: AuthProvider;
+  } | null>(null);
+  // Inline error inside the modal when the user clicks the wrong-provider
+  // button (e.g. they have multiple browser tabs open and click the
+  // second-provider button while the modal is up). Cleared on modal close.
+  const [wrongProviderMessage, setWrongProviderMessage] = useState<string | null>(
+    null,
+  );
+  // Refs to the second-provider buttons that triggered the link flow.
+  // Esc on the modal restores focus to the originally-clicked button per
+  // the WAI-ARIA APG dialog pattern. The ref of the *triggering* provider
+  // is captured into `linkTriggerRef` when `setPendingLink` fires.
+  const googleTriggerRef = useRef<HTMLElement | null>(null);
+  const appleTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const facebookTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const linkTriggerRef = useRef<HTMLElement | null>(null);
+
+  const handleLinked = useCallback(
+    (session: AuthenticatedSession) => {
+      setPendingLink(null);
+      setWrongProviderMessage(null);
+      signIn(session);
+      navigate(next, { replace: true });
+    },
+    [signIn, navigate, next],
+  );
+
+  const handleLinkClose = useCallback(() => {
+    setPendingLink(null);
+    setWrongProviderMessage(null);
+  }, []);
+
+  // Wrong-provider re-auth: while `pendingLink` is set, clicking a
+  // non-original-provider button on the underlying page is a user mistake
+  // (they had two tabs open, or didn't read the modal). Surface an inline
+  // message in the modal rather than completing a fresh sign-in flow that
+  // would replace the link state.
+  const claimWrongProviderClick = useCallback(
+    (provider: AuthProvider): boolean => {
+      if (!pendingLink) return false;
+      if (pendingLink.provider === provider) return false;
+      setWrongProviderMessage(
+        `Sign in with ${
+          pendingLink.provider.charAt(0).toUpperCase() + pendingLink.provider.slice(1)
+        } to link your accounts.`,
+      );
+      return true;
+    },
+    [pendingLink],
+  );
+
   // Already signed in? Bounce to `next`. Effect rather than render guard so
   // we don't violate the rules of hooks below.
   useEffect(() => {
@@ -114,13 +171,21 @@ export function SignInPage() {
 
   const handleCredential = useCallback(
     async (resp: GoogleCredentialResponse) => {
+      // While a link flow is in progress, a Google click on the underlying
+      // page is a wrong-provider mistake — surface inline in the modal
+      // rather than starting a fresh callback round-trip.
+      if (claimWrongProviderClick("google")) return;
       setError(null);
       setStatus("exchanging");
       try {
         const session = await api.auth.googleCallback(resp.credential);
         if (session.linkRequired) {
-          setStatus("error");
-          setError(LINK_REQUIRED_MESSAGE);
+          setStatus("ready");
+          linkTriggerRef.current = googleTriggerRef.current;
+          setPendingLink({
+            token: session.linkToken,
+            provider: session.linkProvider,
+          });
           return;
         }
         signIn(session);
@@ -140,7 +205,7 @@ export function SignInPage() {
         }
       }
     },
-    [signIn, navigate, next],
+    [signIn, navigate, next, claimWrongProviderClick],
   );
 
   // Latest credential handler in a ref so initAndRender doesn't have to
@@ -260,7 +325,11 @@ export function SignInPage() {
           name: composeAppleDisplayName(resp.user),
         });
         if (session.linkRequired) {
-          setError(LINK_REQUIRED_MESSAGE);
+          linkTriggerRef.current = appleTriggerRef.current;
+          setPendingLink({
+            token: session.linkToken,
+            provider: session.linkProvider,
+          });
           return;
         }
         signIn(session);
@@ -351,6 +420,10 @@ export function SignInPage() {
 
   const handleAppleClick = useCallback(async () => {
     if (appleStatus !== "ready" || appleBusy) return;
+    // Wrong-provider guard while a link flow is open (the underlying Apple
+    // button is still focusable behind the modal until the focus-trap
+    // reaches it). Surfacing in-modal is the kindest recovery.
+    if (claimWrongProviderClick("apple")) return;
     setAppleBusy(true);
     setError(null);
     try {
@@ -372,7 +445,7 @@ export function SignInPage() {
     } finally {
       setAppleBusy(false);
     }
-  }, [appleStatus, appleBusy, handleAppleResponse]);
+  }, [appleStatus, appleBusy, handleAppleResponse, claimWrongProviderClick]);
 
   const appleDisabled = appleStatus !== "ready" || appleBusy;
 
@@ -394,9 +467,13 @@ export function SignInPage() {
         if (session.linkRequired) {
           // Per docs/auth.md § Facebook specifics this branch is unreachable
           // in practice (Graph API doesn't expose `email_verified` so the
-          // collision check never fires), but the contract field is
-          // there — surface the slice-1/2 generic message defensively.
-          setError(LINK_REQUIRED_MESSAGE);
+          // collision check never fires); the modal is wired anyway so a
+          // future Graph response shape change plugs in cleanly.
+          linkTriggerRef.current = facebookTriggerRef.current;
+          setPendingLink({
+            token: session.linkToken,
+            provider: session.linkProvider,
+          });
           return;
         }
         signIn(session);
@@ -479,6 +556,7 @@ export function SignInPage() {
 
   const handleFacebookClick = useCallback(async () => {
     if (facebookStatus !== "ready" || facebookBusy) return;
+    if (claimWrongProviderClick("facebook")) return;
     setFacebookBusy(true);
     setError(null);
     try {
@@ -494,7 +572,7 @@ export function SignInPage() {
     } finally {
       setFacebookBusy(false);
     }
-  }, [facebookStatus, facebookBusy, handleFacebookResponse]);
+  }, [facebookStatus, facebookBusy, handleFacebookResponse, claimWrongProviderClick]);
 
   const facebookDisabled = facebookStatus !== "ready" || facebookBusy;
 
@@ -543,7 +621,10 @@ export function SignInPage() {
 
         {googleVisible && (
           <div
-            ref={buttonContainerRef}
+            ref={(node) => {
+              buttonContainerRef.current = node;
+              googleTriggerRef.current = node;
+            }}
             data-testid="google-button-container"
             className="min-h-[44px] flex items-center"
             aria-label="Sign in with Google"
@@ -553,6 +634,7 @@ export function SignInPage() {
         {appleVisible && (
           <div className="mt-3">
             <button
+              ref={appleTriggerRef}
               type="button"
               onClick={() => void handleAppleClick()}
               disabled={appleDisabled}
@@ -579,6 +661,7 @@ export function SignInPage() {
         {facebookVisible && (
           <div className="mt-3">
             <button
+              ref={facebookTriggerRef}
               type="button"
               onClick={() => void handleFacebookClick()}
               disabled={facebookDisabled}
@@ -649,6 +732,17 @@ export function SignInPage() {
           </button>
         )}
       </section>
+
+      {pendingLink && (
+        <LinkAccountsDialog
+          pendingLink={pendingLink}
+          onLinked={handleLinked}
+          onClose={handleLinkClose}
+          triggerRef={linkTriggerRef}
+          wrongProviderMessage={wrongProviderMessage}
+          onClearWrongProviderMessage={() => setWrongProviderMessage(null)}
+        />
+      )}
     </main>
   );
 }

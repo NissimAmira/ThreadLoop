@@ -35,17 +35,27 @@ policy, local CR subagent, task management via GitHub Projects + RFC/ADR
 conventions, and a multi-agent dev cycle simulating a real product team.
 
 **Auth (Epic #11) is partially shipped — Google (slice 1) and Facebook
-(slice 3) web sign-in are live; Apple (slice 2) shipped descoped: code is
-in main but gated off behind `APPLE_ENABLED=false` / `VITE_APPLE_ENABLED=false`
-awaiting Apple Developer Program enrollment.** A user can hit `/sign-in`,
-sign in with Google or Facebook, land on `/me` showing their display name,
-refresh, and log out. What's in main today:
+(slice 3) web sign-in are live, the cross-provider account-linking flow
+(slice 4) is wired end-to-end on web; Apple (slice 2) shipped descoped:
+code is in main but gated off behind `APPLE_ENABLED=false` /
+`VITE_APPLE_ENABLED=false` awaiting Apple Developer Program enrollment.**
+A user can hit `/sign-in`, sign in with Google or Facebook, land on
+`/me` showing their display name, refresh, and log out. If the BE
+detects a verified-email collision across providers, the user sees a
+modal explaining the link, re-authenticates with the original provider,
+and ends up with a single merged account that signs in via either
+provider. What's in main today:
 
 - All three provider callbacks on the backend (`POST /api/auth/{google,apple,facebook}/callback`)
   with provider-specific verifiers (Google + Apple JWKS, Facebook Graph API
   `/debug_token`).
 - Session middleware: `POST /api/auth/refresh` (rotation + reuse-detection),
   `POST /api/auth/logout` (idempotent), `GET /api/me`, `require_user` bearer-JWT dep.
+- Account-linking resolution: `POST /api/auth/link` consumes a
+  `linkToken` from a callback's `link_required` envelope, re-verifies
+  the original-provider credential, and merges the second-provider
+  identity onto the existing user's `user_identities` rows. Single-use
+  enforcement via `consumed_link_tokens(jti PK)`.
 - `refresh_tokens` table with HMAC-SHA-256-hashed-at-rest tokens, 30-day TTL,
   cascade-on-user-delete.
 - Web: `/sign-in` page with Google and Facebook buttons rendering functional
@@ -53,13 +63,19 @@ refresh, and log out. What's in main today:
   button shipped but hidden in default config (`VITE_APPLE_ENABLED=false`);
   `/me` page, `useAuth()` context with silent-refresh on first paint, Cypress
   smokes covering the Google, Facebook, and Apple (stub) flows end-to-end.
+- Web account-linking modal (`LinkAccountsDialog`) that opens on any
+  callback's `link_required` envelope, runs the original-provider re-
+  auth, posts to `POST /api/auth/link`, and promotes the merged session.
+  Modal lives as a state overlay on `/sign-in` so a reload provably
+  wipes the in-memory `linkToken`. Full WAI-ARIA APG dialog pattern
+  (focus trap, Esc-restores-focus, polite status region). Cypress
+  smoke at `cypress/e2e/sign-in-link.cy.ts`.
 - Wire shape: **camelCase end-to-end** (Pydantic `alias_generator=to_camel`,
   see [ADR 0009](./docs/adrs/0009-camelcase-on-the-wire.md)). The shared TS
   types in `@threadloop/shared` are consumed directly by the web client with
   no per-endpoint adapter.
 
-**Still pending in Epic #11:** full `link_required` linking UI (slice 4:
-#40 + BE #18) and the mobile SDK integrations (slice 5: #20). Slice-by-slice
+**Still pending in Epic #11:** the mobile SDK integrations (slice 5: #20). Slice-by-slice
 rollout per RFC 0001, gated by per-provider feature flags as BE+FE pairs
 (BE: `GOOGLE_ENABLED` / `APPLE_ENABLED` / `FACEBOOK_ENABLED`; FE:
 `VITE_GOOGLE_ENABLED` / `VITE_APPLE_ENABLED` / `VITE_FACEBOOK_ENABLED`) so

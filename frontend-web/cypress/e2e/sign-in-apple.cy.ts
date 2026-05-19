@@ -150,7 +150,7 @@ describe("ThreadLoop sign-in (slice 2: Apple)", () => {
     );
   });
 
-  it("linkRequired response shows the generic cross-provider error", () => {
+  it("linkRequired response opens the link-accounts modal (slice 4 / #40)", () => {
     cy.intercept("POST", "/api/auth/apple/callback", {
       statusCode: 200,
       body: { linkRequired: true, linkProvider: "google", linkToken: "link-jwt" },
@@ -169,9 +169,9 @@ describe("ThreadLoop sign-in (slice 2: Apple)", () => {
     cy.wait("@appleCallbackLink");
 
     cy.location("pathname").should("eq", "/sign-in");
-    cy.get('[data-testid="sign-in-error"]').should(
-      "contain.text",
-      "registered with another provider",
-    );
+    cy.get('[data-testid="link-accounts-dialog"]')
+      .should("be.visible")
+      .and("contain.text", "Google");
+    cy.get('[data-testid="sign-in-error"]').should("have.text", "");
   });
 });
