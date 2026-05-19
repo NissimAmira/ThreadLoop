@@ -175,6 +175,17 @@ provider whose email matches an existing first-provider account. The
 modal appears, you re-auth with the original provider, and on success
 both identities are merged onto the same `users` row.
 
+If you cold-start the app while the backend is unreachable (airplane
+mode, backend down, transient 5xx), `AuthContext` falls back to the
+cached access token + `/api/me` and `MeScreen` surfaces a "Working
+offline — some features may be unavailable" banner. The banner
+clears automatically on the next successful refresh, sign-in, or
+sign-out. The cached token is still re-validated against `/api/me`
+before the screen renders, so a server-side revocation still drops
+you to anonymous — the fallback only papers over transport / 5xx /
+429 hiccups, never a real 401. Design rationale lives in
+[`docs/auth.md`](../docs/auth.md) § "Auth context".
+
 ## Web
 
 The mobile workspace can render via `expo start --web` for quick

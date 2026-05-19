@@ -1018,14 +1018,32 @@ deltas over web:
    cookie jar respects it transparently with
    `credentials: "include"`.
 2. **Network-failure fallback to stored token + `/api/me`.** If
-   `POST /api/auth/refresh` fails with a network error (not a 401),
-   the context tries the cached access token against `/api/me`. If
-   that succeeds, the user lands on the authenticated state with the
-   last-known profile and a stale-but-still-valid access token. If
-   `/api/me` 401s, the stored token is cleared and the user lands on
-   anonymous. The cookie-only web client doesn't need this branch
-   because its refresh path is the only auth-state reconstruction
-   surface.
+   `POST /api/auth/refresh` fails with anything other than a 401
+   (network error, 5xx, 429 — i.e. any transport or transient
+   availability failure), the context tries the cached access token
+   against `/api/me`. If that succeeds, the user lands on the
+   authenticated state with the last-known profile and a stale-but-
+   still-valid access token, and the `offline` flag on the context is
+   set so screens can surface a "Working offline" banner. Only a
+   genuine 401 from `/api/auth/refresh` clears the stored token and
+   drops the user to anonymous — anything else preserves the cached
+   session. If the fallback `/api/me` itself 401s, the stored token is
+   cleared and the user lands on anonymous (so a server-side
+   revocation eventually catches up). The cookie-only web client
+   doesn't need this branch because its refresh path is the only
+   auth-state reconstruction surface.
+
+   **"Working offline" banner.** `AuthContext` exposes an
+   `offline: boolean` alongside `state`. It flips to `true` whenever
+   we hydrated via the degraded cached-token + `/api/me` path (any
+   non-401 refresh failure with a cached session in
+   `expo-secure-store`), and `MeScreen` renders a
+   "Working offline — some features may be unavailable" banner while
+   it's set. The flag clears on the next successful `signIn`,
+   `signOut`, or refresh round-trip. Because the cached token is
+   still re-validated against `/api/me` before the user is
+   reauthenticated, a server-revoked session won't grant offline
+   access — it'll 401 from `/api/me` and fall through to anonymous.
 
 The secure-store wrapper at `src/auth/secureStore.ts` falls back to
 an in-memory map on web / jsdom (where `expo-secure-store` throws)
