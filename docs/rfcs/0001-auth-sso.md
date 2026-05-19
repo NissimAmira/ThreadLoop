@@ -1,6 +1,8 @@
 # RFC 0001: SSO authentication (Google / Apple / Facebook)
 
-- **Status:** Partially implemented (Google web live; Apple deferred — see § Deferred providers; Facebook web + mobile pending)
+- **Status:** Partially implemented (Google + Facebook web live;
+  cross-provider account-linking live on web; Apple descoped — see
+  § Deferred providers; mobile SDK integration pending)
 - **Author:** Nissim
 - **Created:** 2026-04-30
 - **Approved:** 2026-04-30
@@ -9,6 +11,8 @@
   by default per `docs/auth.md` § "Per-provider gating"; they stay
   dormant until the user enrolls in the Apple Developer Program. See
   § "Deferred providers" below.
+- **Revised:** 2026-05-19 — slices 3 and 4 shipped. Only the mobile
+  slice (#20) remains in this Epic.
 - **Tracking issue:** #11 (Epic)
 - **Slice 1 shipped:** 2026-05-03 — Google web sign-in end-to-end
   (PR #43 FE + PR #41 BE + PR #47 wire shape; ADR 0009 captures the
@@ -18,9 +22,21 @@
   web sign-in code merged in PR #55 (#38). Code is in main, disabled
   by default (`APPLE_ENABLED=false`). Stays deferred per § "Deferred
   providers" below.
-- **Remaining slices in this Epic:** Facebook web button (#39),
-  `link_required` UI flow (#40, paired with BE #18), mobile SDK
-  integration (#20, Apple-on-iOS dropped from scope).
+- **Slice 3 shipped:** 2026-05-09 — Facebook web sign-in end-to-end
+  in PR #60 (#39). Wired via the Facebook Login JS SDK; gated by
+  `FACEBOOK_ENABLED` (BE) + `VITE_FACEBOOK_ENABLED` (FE). Live in
+  the default web deploy alongside Google.
+- **Slice 4 shipped:** 2026-05-19 — cross-provider account-linking
+  end-to-end on web. BE half (#18) landed in PR #64 with
+  `POST /api/auth/link`, the `user_identities` source-of-truth
+  table, and `consumed_link_tokens` single-use enforcement. FE half
+  (#40) landed in PR #65 with the `LinkAccountsDialog` modal
+  implementing the WAI-ARIA APG dialog pattern, the 401 / 409 / 503
+  failure mapping from PR #64, and a 10-minute client-side TTL
+  matching the BE's default. Touch-target sweep follow-up tracked
+  in #66 (P2) — to land before slice 5 mirrors the pattern on mobile.
+- **Remaining slices in this Epic:** mobile SDK integration (#20,
+  Apple-on-iOS dropped from scope). Slice 5 closes the Epic.
 
 ## TL;DR
 
