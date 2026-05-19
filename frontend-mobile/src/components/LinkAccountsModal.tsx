@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
+  InteractionManager,
   Modal,
   Pressable,
   StyleSheet,
   Text,
   View,
+  findNodeHandle,
 } from "react-native";
+import type { Text as RNText } from "react-native";
 import type {
   AuthProvider,
   AuthenticatedSession,
@@ -88,6 +92,28 @@ export function LinkAccountsModal({
   const google = useGoogleAuth();
   const facebook = useFacebookAuth();
   const lastClickedRef = useRef<AuthProvider | null>(null);
+  const titleRef = useRef<RNText | null>(null);
+
+  // ---- Move screen-reader focus to the dialog title on open ----
+  // RN's <Modal> doesn't auto-shift screen-reader focus the way the web
+  // <dialog> + focus-trap pattern does. iOS VoiceOver will otherwise
+  // continue reading from wherever focus was before the modal mounted
+  // (often a button now visually obscured but still in the a11y tree
+  // underneath). Mirrors the web `LinkAccountsDialog` behaviour of
+  // focusing the first focusable element on open. Runs after
+  // interactions complete so iOS doesn't swallow the focus call during
+  // the modal's fade animation.
+  useEffect(() => {
+    const handle = InteractionManager.runAfterInteractions(() => {
+      const node = titleRef.current && findNodeHandle(titleRef.current);
+      if (node != null) {
+        AccessibilityInfo.setAccessibilityFocus(node);
+      }
+    });
+    return () => {
+      handle.cancel();
+    };
+  }, []);
 
   // ---- Failure mapping ----
   const handleLinkError = useCallback((err: unknown) => {
@@ -233,13 +259,24 @@ export function LinkAccountsModal({
     >
       <View style={styles.overlay}>
         <View
-          accessibilityRole="alert"
+          // NOTE: deliberately no `accessibilityRole="alert"` here — `alert`
+          // is for ephemeral toast-like announcements, not labelled modal
+          // dialogs (the web equivalent uses `role="dialog"`, not
+          // `role="alert"`). On RN, `accessibilityViewIsModal` on the
+          // parent `<Modal>` + this card's `accessibilityLabel` carry the
+          // "this is a dialog you must dismiss" semantics. The polite-live
+          // status `<Text>` below carries the alert role for transient
+          // status announcements (`Linking your accounts…` / errors).
           accessibilityLabel="Link your accounts"
           style={styles.card}
           testID="link-accounts-modal"
         >
           <View style={styles.headerRow}>
-            <Text accessibilityRole="header" style={styles.title}>
+            <Text
+              ref={titleRef}
+              accessibilityRole="header"
+              style={styles.title}
+            >
               Link your accounts
             </Text>
             <Pressable
