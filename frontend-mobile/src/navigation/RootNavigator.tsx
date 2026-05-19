@@ -1,6 +1,6 @@
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../auth/AuthContext";
 import { MeScreen } from "../screens/MeScreen";
 import { SignInScreen } from "../screens/SignInScreen";
@@ -24,9 +24,18 @@ export function RootNavigator() {
   const { state } = useAuth();
 
   if (state.status === "loading") {
+    // Cold-start splash. Visible label + screen-reader label both carry
+    // "Signing you in…" so sighted users get context during a slow
+    // refresh (3G / cold backend) and VoiceOver / TalkBack announces
+    // the same. Mirrors web's brief "checking session" state.
     return (
-      <View style={styles.loading} accessibilityLabel="Loading session">
+      <View
+        style={styles.loading}
+        accessible
+        accessibilityLabel="Signing you in"
+      >
         <ActivityIndicator />
+        <Text style={styles.loadingText}>Signing you in…</Text>
       </View>
     );
   }
@@ -58,5 +67,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#fafafa",
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: "#374151",
   },
 });
