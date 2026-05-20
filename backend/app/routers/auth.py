@@ -879,21 +879,21 @@ def _handle_facebook_callback(
 ) -> Session:
     """Facebook SSO callback.
 
-    Differs from Google / Apple in two important ways:
+    Differs from Google / Apple in one important way:
 
-    1. **No JWT to verify.** The client hands us an opaque user access token;
-       we resolve identity via two Graph API calls (`/debug_token` then
-       `/me`). The Graph API is the trust anchor — there is no JWKS, no key
-       rotation, no in-process cache. See `app.auth.facebook` for the flow.
+    **No JWT to verify.** The client hands us an opaque user access token;
+    we resolve identity via two Graph API calls (`/debug_token` then `/me`).
+    The Graph API is the trust anchor — there is no JWKS, no key rotation,
+    no in-process cache. See `app.auth.facebook` for the flow.
 
-    2. **No verified email.** Facebook does not expose `email_verified` in
-       the Graph response, so the verifier hard-codes `email_verified=False`
-       on every Facebook identity. The cross-provider collision check below
-       therefore never fires for Facebook — matching against an unverified
-       email would be the same account-takeover vector the Google and Apple
-       branches guard against. This is intentional, not an oversight; the
-       absence of a `link_required` path on Facebook sign-ins is documented
-       in `docs/auth.md` § Facebook specifics.
+    Email collision detection is identical to the Google branch. Per ADR 0010
+    (`docs/adrs/0010-facebook-graph-email-is-verified.md`), an email returned
+    by Facebook's Graph `/me` is treated as verified — Facebook only echoes
+    confirmed emails — so the verifier sets `email_verified=True` for a
+    Facebook identity that carries an email. The cross-provider collision
+    check below is a live path: a Facebook sign-in on an email already held
+    by a verified Google (or Apple) account returns the `link_required`
+    envelope rather than silently creating a duplicate `users` row.
     """
     try:
         identity = verify_facebook_access_token(
@@ -920,12 +920,10 @@ def _handle_facebook_callback(
     existing = find_user_by_identity(db, provider="facebook", provider_user_id=identity.sub)
 
     # Cross-provider collision check. Structurally identical to the Google
-    # branch, but `identity.email_verified` is hard-coded False by the
-    # verifier (see module docstring), so this branch never fires in
-    # practice. The conditional is kept verbatim rather than dead-coded out
-    # so a future change to Facebook's Graph response (e.g. them adding
-    # `verified` to /me) plugs in cleanly without requiring the route layer
-    # to also be revised.
+    # branch. Per ADR 0010, the Facebook verifier sets `email_verified=True`
+    # when `/me` returns a confirmed email, so this is a live path: a
+    # Facebook sign-in on an email already held by a verified user from
+    # another provider returns the `link_required` envelope.
     if existing is None and identity.email and identity.email_verified:
         collision = db.execute(
             select(User).where(

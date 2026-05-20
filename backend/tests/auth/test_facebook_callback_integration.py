@@ -151,7 +151,8 @@ def test_new_user_signin_with_email_creates_user_and_refresh_row(
         identity=FacebookIdentity(
             sub="fb-sub-new-1",
             email="newcomer@example.com",
-            email_verified=False,  # Facebook never sets this True per design
+            # Per ADR 0010: a Facebook identity carrying an email is verified.
+            email_verified=True,
             name="Newcomer",
             picture="https://cdn.fb/avatar.png",
         )
@@ -170,7 +171,8 @@ def test_new_user_signin_with_email_creates_user_and_refresh_row(
     assert body["user"]["provider"] == "facebook"
     assert body["user"]["email"] == "newcomer@example.com"
     assert body["user"]["displayName"] == "Newcomer"
-    assert body["user"]["emailVerified"] is False
+    # A Facebook-primary user created with an email is persisted verified.
+    assert body["user"]["emailVerified"] is True
     assert body["user"]["avatarUrl"] == "https://cdn.fb/avatar.png"
 
     set_cookie = resp.headers.get("set-cookie", "")
@@ -192,6 +194,9 @@ def test_new_user_signin_with_email_creates_user_and_refresh_row(
         ).all()
         assert len(users) == 1
         assert users[0][1] == "facebook"
+        # Persisted `users.email_verified` is True for an email-bearing
+        # Facebook-primary row (ADR 0010).
+        assert users[0][4] is True
         user_id = users[0][0]
 
         rows = conn.execute(
@@ -268,7 +273,7 @@ def test_subsequent_signin_reuses_existing_user_without_overwrite(
         identity=FacebookIdentity(
             sub="fb-sub-repeat",
             email="r@example.com",
-            email_verified=False,
+            email_verified=True,
             name="Original Name",
             picture=None,
         )
@@ -287,7 +292,7 @@ def test_subsequent_signin_reuses_existing_user_without_overwrite(
         identity=FacebookIdentity(
             sub="fb-sub-repeat",
             email="r@example.com",
-            email_verified=False,
+            email_verified=True,
             name="New Name From FB",
             picture=None,
         )
@@ -421,21 +426,19 @@ def test_facebook_disabled_returns_404(auth_client: TestClient) -> None:
     assert bad_body_resp.status_code == 404
 
 
-# ----- account-linking detection (Facebook specifics) -----------------------
+# ----- account-linking detection --------------------------------------------
 
 
-def test_email_collision_does_not_trigger_link_required_facebook(
+def test_email_collision_with_google_user_returns_link_required(
     auth_client: TestClient,
     stub_facebook_verifier: Callable[..., None],
     pg_url: str,
 ) -> None:
-    """The Facebook-specific guarantee: because Graph API doesn't expose
-    `email_verified`, the verifier always sets it False, so the cross-provider
-    collision check never fires for Facebook sign-ins. A Facebook user whose
-    email matches an existing verified Google user must NOT trip the
-    `link_required` envelope — they get a fresh independent Facebook
-    identity, and account merging happens (if at all) through the user-
-    initiated linking flow shipping in #18.
+    """Per ADR 0010, an email returned by Facebook's Graph `/me` is verified.
+    A Facebook sign-in on an email already held by a verified Google-primary
+    user must return the `link_required` envelope — NOT silently create a
+    second `users` row. This is the live entry point for slice-4 account
+    linking that defect test "A5" found missing.
     """
     google_user_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -462,7 +465,7 @@ def test_email_collision_does_not_trigger_link_required_facebook(
         identity=FacebookIdentity(
             sub="fb-sub-newcomer",
             email="alice@example.com",
-            email_verified=False,  # Facebook never claims verified
+            email_verified=True,  # ADR 0010: a Graph /me email is verified
             name="Alice (Facebook)",
             picture=None,
         )
@@ -475,30 +478,93 @@ def test_email_collision_does_not_trigger_link_required_facebook(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["linkRequired"] is False, (
-        "Facebook email_verified is always False so collision check must NOT fire"
+    assert body["linkRequired"] is True, (
+        "a verified-email collision with a Google user must trip link_required"
     )
-    assert body["user"]["provider"] == "facebook"
-    assert body["user"]["email"] == "alice@example.com"
+    assert body["linkProvider"] == "google"
+    assert body["linkToken"]
+    assert "accessToken" not in body or body["accessToken"] is None
+    assert "user" not in body or body["user"] is None
+
+    # No refresh cookie on the link path.
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "refresh_token=" not in set_cookie
 
     with engine.begin() as conn:
         fb_user_count = conn.execute(
             text("SELECT count(*) FROM users WHERE provider = 'facebook'")
         ).scalar_one()
+        token_count = conn.execute(text("SELECT count(*) FROM refresh_tokens")).scalar_one()
     engine.dispose()
-    assert fb_user_count == 1, "Facebook sign-in must create a fresh independent user"
+    assert fb_user_count == 0, "link_required path must not insert a Facebook user row"
+    assert token_count == 0, "link_required path must not mint a refresh token"
+
+    # The link token carries the second-provider info `POST /api/auth/link`
+    # needs to perform the merge.
+    from app.auth.link import decode_link_token
+    from app.config import Settings
+
+    test_settings = Settings(
+        jwt_signing_key="test-jwt-signing-key",
+        link_token_ttl_seconds=600,
+    )
+    claims = decode_link_token(body["linkToken"], settings=test_settings)
+    assert claims.existing_user_id == google_user_id
+    assert claims.new_provider == "facebook"
+    assert claims.new_provider_user_id == "fb-sub-newcomer"
+    assert claims.new_email == "alice@example.com"
 
 
-def test_unverified_email_does_not_trigger_link_required(
+def test_no_collision_creates_fresh_user(
     auth_client: TestClient,
     stub_facebook_verifier: Callable[..., None],
     pg_url: str,
 ) -> None:
-    """Same guarantee as the Google / Apple branches: unverified email must NOT
-    match against existing rows. For Facebook this is the dominant case (the
-    verifier hard-codes `email_verified=False`), but assert it explicitly so a
-    future change to the verifier — e.g. exposing a verified flag — still
-    passes through this guard rather than silently enabling auto-merge.
+    """Happy-path regression guard: a Facebook sign-in on an email with no
+    existing collision still creates a fresh, independent user — the ADR 0010
+    fix must not turn every Facebook sign-in into a link prompt.
+    """
+    stub_facebook_verifier(
+        identity=FacebookIdentity(
+            sub="fb-sub-solo",
+            email="solo@example.com",
+            email_verified=True,
+            name="Solo Person",
+            picture=None,
+        )
+    )
+
+    resp = auth_client.post(
+        "/api/auth/facebook/callback",
+        json={"accessToken": "anything"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["linkRequired"] is False
+    assert body["user"]["provider"] == "facebook"
+    assert body["user"]["email"] == "solo@example.com"
+    assert body["user"]["emailVerified"] is True
+
+    engine = create_engine(pg_url, future=True)
+    with engine.begin() as conn:
+        fb_user_count = conn.execute(
+            text("SELECT count(*) FROM users WHERE provider = 'facebook'")
+        ).scalar_one()
+    engine.dispose()
+    assert fb_user_count == 1, "no-collision Facebook sign-in must create a fresh user"
+
+
+def test_no_email_scope_does_not_trigger_link_required(
+    auth_client: TestClient,
+    stub_facebook_verifier: Callable[..., None],
+    pg_url: str,
+) -> None:
+    """Regression guard for the no-email-scope case: when the user declined
+    the `email` permission the identity is `email=None, email_verified=False`,
+    so the collision check cannot fire even if some other user happens to
+    exist — there is no email to match on. A fresh Facebook user is created
+    with `users.email_verified = false`.
     """
     google_user_id = uuid.uuid4()
     now = datetime.now(UTC)
@@ -523,10 +589,10 @@ def test_unverified_email_does_not_trigger_link_required(
 
     stub_facebook_verifier(
         identity=FacebookIdentity(
-            sub="fb-sub-imposter",
-            email="carol@example.com",
+            sub="fb-sub-no-email",
+            email=None,
             email_verified=False,
-            name=None,
+            name="No Email Person",
             picture=None,
         )
     )
@@ -541,4 +607,10 @@ def test_unverified_email_does_not_trigger_link_required(
     assert body["linkRequired"] is False
     assert body["user"]["provider"] == "facebook"
     assert body["user"]["emailVerified"] is False
+
+    with engine.begin() as conn:
+        fb_user_count = conn.execute(
+            text("SELECT count(*) FROM users WHERE provider = 'facebook'")
+        ).scalar_one()
     engine.dispose()
+    assert fb_user_count == 1, "no-email Facebook sign-in still creates a fresh user"

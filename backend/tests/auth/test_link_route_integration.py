@@ -431,14 +431,14 @@ def test_link_merge_via_facebook_second_provider(
     stub_facebook_verifier: Callable[..., None],
     pg_url: str,
 ) -> None:
-    """Real-deployment-coverage path: Facebook never trips the BE collision
-    detection (per `docs/auth.md` § Facebook specifics — Graph API doesn't
-    expose `email_verified`), so the only way to reach the link route via
-    Facebook in production is for the user to deliberately initiate it.
-    But the route can absolutely consume a Facebook-targeted link_token if
-    one is hand-issued — exercise that here with a synthetic link_token to
-    confirm the merge logic doesn't accidentally hard-code "second provider
-    must be Apple."
+    """Confirms `POST /api/auth/link` consumes a Facebook-targeted link_token
+    and doesn't accidentally hard-code "second provider must be Apple."
+
+    The link_token is hand-issued here rather than obtained from a stubbed
+    Facebook callback so this test stays focused on the merge logic — the
+    Facebook callback's own emission of a Facebook-targeted link_token is
+    covered by `test_facebook_callback_integration.py`
+    (`test_email_collision_with_google_user_returns_link_required`).
     """
     # Original Google sign-in.
     first = auth_client.post(
@@ -455,10 +455,8 @@ def test_link_merge_via_facebook_second_provider(
     google_user_id = uuid.UUID(first.json()["user"]["id"])
     auth_client.cookies.clear()
 
-    # Synthesise a link_token as if the Facebook callback HAD detected a
-    # collision. Done test-side rather than via a stubbed callback because
-    # the BE branch is intentionally inert (Facebook always sets
-    # email_verified=False; collision is a no-op in production).
+    # Synthesise the same link_token the Facebook callback's collision branch
+    # issues, so this test exercises the merge logic in isolation.
     settings = _link_settings_for(auth_client)
     link_token, _ = issue_link_token(
         existing_user_id=google_user_id,
