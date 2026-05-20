@@ -36,10 +36,15 @@ def _alembic_config(url: str) -> Config:
 
 
 def test_migration_round_trip(pg_url: str) -> None:
-    """0001 → 0002 → 0003 → downgrade -1 → 0003 again. The new tables
-    appear and disappear in lockstep. Non-trivial because Alembic gets
-    indexes and FKs subtly wrong if `downgrade()` doesn't mirror
+    """0001 → 0002 → 0003 → downgrade to 0002 → 0003 again. The 0003
+    tables appear and disappear in lockstep. Non-trivial because Alembic
+    gets indexes and FKs subtly wrong if `downgrade()` doesn't mirror
     `upgrade()` exactly.
+
+    Updated by #70: head is 0004 now (the Facebook `email_verified`
+    backfill, a no-op `downgrade()`), so `downgrade -1` from head lands
+    on 0003 and leaves the 0003 tables in place. To exercise revision
+    0003's `downgrade()` specifically, downgrade explicitly to 0002.
     """
     cfg = _alembic_config(pg_url)
     engine = create_engine(pg_url)
@@ -49,7 +54,7 @@ def test_migration_round_trip(pg_url: str) -> None:
     assert "user_identities" in inspector.get_table_names()
     assert "consumed_link_tokens" in inspector.get_table_names()
 
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "0002")
     inspector = inspect(engine)
     assert "user_identities" not in inspector.get_table_names()
     assert "consumed_link_tokens" not in inspector.get_table_names()
