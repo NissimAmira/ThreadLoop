@@ -394,6 +394,66 @@ def test_email_collision_with_other_provider_returns_link_required(
     assert claims.new_email == "alice@example.com"
 
 
+def test_email_collision_with_facebook_user_returns_link_required(
+    auth_client: TestClient,
+    google_id_token: Callable[..., str],
+    pg_url: str,
+) -> None:
+    """The reverse direction of the ADR 0010 fix: a Facebook-primary user
+    created *after* the fix carries `email_verified=true`, so a later Google
+    sign-in on the same email satisfies the `User.email_verified.is_(True)`
+    filter and trips `link_required`. This closes the previously-bidirectional
+    exemption — a Facebook-first user no longer silently gets a duplicate
+    Google row.
+    """
+    facebook_user_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    engine = create_engine(pg_url, future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users "
+                "(id, provider, provider_user_id, email, email_verified, "
+                "display_name, can_sell, can_purchase, created_at, updated_at) "
+                "VALUES (:id, 'facebook', :sub, :email, true, "
+                "'Dave (Facebook)', false, true, :now, :now)"
+            ),
+            {
+                "id": facebook_user_id,
+                "sub": "facebook-sub-existing",
+                "email": "dave@example.com",
+                "now": now,
+            },
+        )
+
+    token = google_id_token(
+        sub="google-sub-dave",
+        aud=GOOGLE_AUD,
+        email="dave@example.com",
+        email_verified=True,
+        name="Dave (Google)",
+    )
+
+    resp = auth_client.post("/api/auth/google/callback", json={"idToken": token})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["linkRequired"] is True
+    assert body["linkProvider"] == "facebook"
+    assert body["linkToken"]
+
+    with engine.begin() as conn:
+        token_count = conn.execute(text("SELECT count(*) FROM refresh_tokens")).scalar_one()
+        google_user_count = conn.execute(
+            text("SELECT count(*) FROM users WHERE provider = 'google'")
+        ).scalar_one()
+    engine.dispose()
+
+    assert token_count == 0, "link_required path must not mint a refresh token"
+    assert google_user_count == 0, "link_required path must not insert a Google user row"
+
+
 def test_unverified_email_does_not_trigger_link_required(
     auth_client: TestClient,
     google_id_token: Callable[..., str],

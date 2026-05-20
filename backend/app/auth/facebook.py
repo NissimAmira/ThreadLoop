@@ -42,12 +42,16 @@ Belt-and-braces checks layered on top of the `app_id` guarantee:
   end is authoritative.
 
 Email handling: Facebook's `email` permission is optional — users can
-decline it, in which case `/me` omits the `email` field entirely. We treat
-any returned email as **unverified** because Facebook does not expose
-`email_verified` in the Graph response and #18's account-linking logic
-depends on the verified-email guarantee. Result: a Facebook sign-in never
-provokes the cross-provider collision check (no verified email to match)
-which is the documented intentional behaviour, not an oversight.
+decline it, in which case `/me` omits the `email` field entirely. When `/me`
+*does* return a non-empty `email`, we treat it as **verified**: per ADR 0010
+(`docs/adrs/0010-facebook-graph-email-is-verified.md`), Facebook's Graph API
+`/me?fields=email` only ever returns an email the user has confirmed with
+Facebook — unconfirmed emails are omitted from the response entirely. The
+absence of a `verified` flag is not the same as the email being unverified.
+A Facebook sign-in carrying an email therefore participates in cross-provider
+collision detection on the same footing as Google and Apple. When `/me`
+omits `email`, the identity stays `email=None, email_verified=False` —
+there is nothing to verify.
 
 Failure semantics map to the OpenAPI contract:
     - Graph API unreachable / 5xx           -> GraphApiUnavailableError -> 503
@@ -98,11 +102,13 @@ class FacebookIdentity:
     """Verified profile fields from a Facebook user access token, narrowed to
     what the route layer needs.
 
-    `email_verified` is hard-coded to `False` because Facebook's Graph API
-    does not return a verified-email flag — we cannot make the same guarantee
-    Google and Apple's ID tokens give us. The route layer relies on this to
-    skip cross-provider collision detection on Facebook sign-ins (matching
-    against an unverified email would be an account-takeover vector).
+    `email_verified` is `True` whenever `email` is a non-empty string, and
+    `False` when `email` is `None`. Per ADR 0010
+    (`docs/adrs/0010-facebook-graph-email-is-verified.md`), Facebook's Graph
+    API `/me` only returns an email the user has confirmed — an unconfirmed
+    email is omitted entirely — so a present `/me` email is a verified email.
+    The route layer relies on this so a Facebook sign-in carrying an email is
+    a real participant in cross-provider collision detection.
     """
 
     sub: str
@@ -205,10 +211,11 @@ def _parse_me_response(payload: Any) -> FacebookIdentity:
     return FacebookIdentity(
         sub=sub_raw,
         email=email,
-        # Facebook does not expose `email_verified`. Documented in the module
-        # docstring; the route layer relies on this to skip collision
-        # detection.
-        email_verified=False,
+        # Per ADR 0010: Facebook's Graph `/me` only echoes an email the user
+        # has confirmed with Facebook — an unconfirmed email is omitted from
+        # the response. So a present email is verified; an absent one leaves
+        # nothing to verify (`email is None` -> `email_verified=False`).
+        email_verified=email is not None,
         name=name,
         picture=picture,
     )

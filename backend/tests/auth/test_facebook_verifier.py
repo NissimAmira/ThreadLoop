@@ -113,14 +113,19 @@ def test_happy_path_with_email() -> None:
     )
     assert identity.sub == "user-12345"
     assert identity.email == "user@example.com"
-    # Facebook does not expose `email_verified`; we hard-code False.
-    assert identity.email_verified is False
+    # Per ADR 0010: a non-empty `/me` email is treated as verified — Facebook
+    # only echoes emails the user has confirmed.
+    assert identity.email_verified is True
     assert identity.name == "Test User"
     assert identity.picture == "https://cdn.fb/avatar.png"
 
 
 def test_happy_path_without_email() -> None:
-    """Users can decline the email permission; /me then omits the field."""
+    """Users can decline the email permission; /me then omits the field.
+
+    Regression guard for ADR 0010: with no email there is nothing to verify,
+    so the identity stays `email=None, email_verified=False`.
+    """
     transport = _make_transport(
         debug_token_response=_ok_debug_token(),
         me_response=_ok_me(email=None),
@@ -132,6 +137,20 @@ def test_happy_path_without_email() -> None:
     assert identity.email is None
     assert identity.email_verified is False
     assert identity.name == "Test User"
+
+
+def test_empty_string_email_treated_as_absent() -> None:
+    """An `email` field present but empty (`""`) is normalised to `None`, so
+    `email_verified` stays `False` — there is no confirmed email to verify."""
+    transport = _make_transport(
+        debug_token_response=_ok_debug_token(),
+        me_response=httpx.Response(200, json={"id": "user-12345", "name": "Z", "email": ""}),
+    )
+    identity = verify_facebook_access_token(
+        USER_ACCESS_TOKEN, app_id=APP_ID, app_secret=APP_SECRET, transport=transport
+    )
+    assert identity.email is None
+    assert identity.email_verified is False
 
 
 def test_happy_path_passes_app_access_token_to_debug_token() -> None:
