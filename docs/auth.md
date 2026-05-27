@@ -646,36 +646,26 @@ the security guarantee comes from two server-side calls to the Graph API.
 - **Email permission is optional.** The `email` permission is a separately
   granted scope; users can decline it in Facebook's consent dialog, in which
   case `/me` omits the `email` field. The verifier surfaces `email=None`
-  and `email_verified=False`, the route's display-name fallback chain is
-  `name → email → "ThreadLoop user"`, and the cross-provider collision
-  check trivially can't fire (no email to match).
-- **`email_verified` is always `False`.** The Graph API does **not** expose
-  a verified-email flag on `/me`. Treating any returned email as unverified
-  is the deliberate choice — silently auto-merging on an unverified email
-  would be the same account-takeover vector the Google and Apple branches
-  already guard against. Result: the cross-provider collision detection
-  (which requires verified emails on both sides) **never fires for
-  Facebook sign-ins**. The conditional is kept verbatim in the route layer
-  so a future change to Facebook's Graph response (e.g. adding a `verified`
-  flag) plugs in cleanly. Account merging across `Facebook ↔ Google/Apple`
-  is therefore exclusively user-initiated through the linking flow shipping
-  in #18.
-  - **The exemption is bidirectional.** An existing Facebook row also won't
-    trigger `link_required` on an incoming Google or Apple sign-in, because
-    both branches require `existing.email_verified=true` to consider a row
-    a collision candidate. Net effect: a user who signs up with Facebook
-    first and Google second gets two unrelated accounts with no link prompt
-    in either direction. This is defensible — we don't trust Facebook's
-    email at all, in either role — but it means Epic #11's AC ("Account-
-    linking prompt fires when an email collision is detected across
-    providers") is fully exempt for Facebook identities. Cross-provider
-    linking that involves a Facebook account is exclusively user-initiated
-    through #18.
+  and `email_verified=False` for that case, the route's display-name
+  fallback chain is `name → email → "ThreadLoop user"`, and the cross-
+  provider collision check trivially can't fire (no email to match).
+- **A returned `/me` email is treated as verified.** When `/me` *does*
+  carry an `email`, the verifier marks it `email_verified=True` and the
+  cross-provider collision branch fires symmetrically with Google and
+  Apple. Rationale and trade-offs are in
+  [ADR 0010](./adrs/0010-facebook-graph-email-is-verified.md): Facebook
+  requires email confirmation at signup and (per Meta's developer docs)
+  suppresses `/me.email` for unverified addresses, so treating the
+  returned value as verified is the calibrated trust call. Without this,
+  the account-linking prompt is unreachable for any Google ↔ Facebook
+  collision — which is exactly what defect "A5" exposed. The link
+  collision is **bidirectional** (`link_required` fires whether the
+  user signs in with Google first or Facebook first), satisfying
+  Epic #11's AC in full for the active Google + Facebook scope.
 - **No relay-equivalent.** Apple's `is_private_email` bypass exists because
   Apple's own ID token tells us the email is a relay address; Facebook has
-  no analogous signal because it never claims verification in the first
-  place. The collision check is the standard one (and never fires per
-  above).
+  no analogous signal — we don't try to detect Facebook relay-style
+  addresses, and the collision check is the standard one.
 - **Failure mapping.** `/debug_token` 5xx or transport-level
   unreachability → `503 graph_api_unavailable`. `/debug_token` 4xx, token
   reported as invalid, token issued for a different app, malformed Graph

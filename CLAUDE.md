@@ -36,11 +36,13 @@ conventions, and a multi-agent dev cycle simulating a real product team.
 
 **Auth (Epic #11) is shipped — Google (slice 1) and Facebook (slice 3)
 sign-in are live on both web and mobile, the cross-provider account-
-linking flow (slice 4) is wired end-to-end on web, and the mobile
-SDK integration (slice 5) ships Google + Facebook on iOS and Android
-via `expo-auth-session`. Apple (slice 2) shipped descoped: web code is
-in main but gated off behind `APPLE_ENABLED=false` /
-`VITE_APPLE_ENABLED=false`, and mobile Apple was dropped from #20 per
+linking flow (slice 4) is reachable for Google ↔ Facebook in both
+directions on web and mobile in the live config (per ADR 0010, after
+#69 + #70 made the Facebook side fire on a verified-email collision),
+and the mobile SDK integration (slice 5) ships Google + Facebook on
+iOS and Android via `expo-auth-session`. Apple (slice 2) shipped
+descoped: web code is in main but gated off behind `APPLE_ENABLED=false`
+/ `VITE_APPLE_ENABLED=false`, and mobile Apple was dropped from #20 per
 the 2026-05-04 scope revision; both stay deferred until Apple Developer
 Program enrollment (tracked as Epic #57).**
 A user can hit `/sign-in` on web or open the Expo app, sign in with

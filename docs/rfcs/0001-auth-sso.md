@@ -368,12 +368,14 @@ Active scope (Google + Facebook on web and mobile):
 - [x] User can sign in via Facebook on iOS and Android.
       *(Slice 5 shipped 2026-05-19.)*
 - [x] Account-linking prompt fires when email collision is detected
-      across providers (Google ↔ Facebook in this Epic — Facebook's
-      side never fires in practice because the Graph API doesn't
-      expose `email_verified`; see `docs/auth.md` § "Facebook
-      specifics"). Apple ↔ Google linking is shipped in code but
-      unreachable while `APPLE_ENABLED=false`. *(Web: slice 4
-      shipped 2026-05-19. Mobile: slice 5 shipped 2026-05-19.)*
+      across providers. Google ↔ Facebook fires in both directions in
+      the live config; see `docs/auth.md` § "Facebook specifics" and
+      ADR 0010 for the Facebook-email-is-verified trust call that
+      makes the Facebook side reachable. Apple ↔ Google linking is
+      shipped in code but unreachable while `APPLE_ENABLED=false`.
+      *(Web: slice 4 shipped 2026-05-19. Mobile: slice 5 shipped
+      2026-05-19. Facebook side made reachable 2026-05-23 via #69 +
+      #70; closeout in #71.)*
 - [x] Session expires after 30 days of inactivity (refresh token
       expiry). *(Slice 1 shipped.)*
 - [x] Logout revokes the refresh token; subsequent /api/auth/refresh
